@@ -2,6 +2,7 @@ const { Writable } = require('stream');
 const path = require('path').posix;
 const SftpClient = require('ssh2-sftp-client');
 const ftp = require('basic-ftp');
+const config = require('./config');
 
 async function streamToBuffer(stream) {
   const chunks = [];
@@ -56,18 +57,22 @@ class SftpRemoteClient {
 class FtpRemoteClient {
   constructor(watcher) {
     this.watcher = watcher;
-    this.client = new ftp.Client(20000);
-    this.client.ftp.verbose = false;
+    this.client = new ftp.Client(config.remoteConnectTimeoutMs);
+    this.client.ftp.verbose = config.ftpVerbose;
   }
 
   async connect() {
-    await this.client.access({
-      host: this.watcher.host,
-      port: this.watcher.port,
-      user: this.watcher.username,
-      password: this.watcher.password,
-      secure: false
-    });
+    try {
+      await this.client.access({
+        host: this.watcher.host,
+        port: this.watcher.port,
+        user: this.watcher.username,
+        password: this.watcher.password,
+        secure: false
+      });
+    } catch (error) {
+      throw new Error(`FTP connect failed to ${this.watcher.host}:${this.watcher.port}: ${error.message}`);
+    }
   }
 
   async stat(remotePath) {

@@ -8,6 +8,7 @@
     "start": "node server.js",
     "build": "node --check server.js && node --check src/index.js && node --check src/routes.js && node --check src/watcherManager.js",
     "dev": "node --watch src/index.js",
+    "diagnose-watcher": "node scripts/diagnose-watcher.js",
     "clear-channel": "node scripts/clear-channel.js"
   },
   "dependencies": {
