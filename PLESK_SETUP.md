@@ -21,12 +21,14 @@ From Plesk Node.js page, run:
 
 ```bash
 npm install --omit=dev
+npm run build
 ```
 
 Or SSH into the app folder and run:
 
 ```bash
 npm install --omit=dev
+npm run build
 ```
 
 ## Environment Variables
