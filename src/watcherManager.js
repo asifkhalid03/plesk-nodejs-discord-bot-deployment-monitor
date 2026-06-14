@@ -38,8 +38,21 @@ class WatcherRuntime {
     if (this.running) return;
     this.running = true;
     this.status({ state: 'starting', message: this.options.stopWhenFinished ? 'Webhook triggered watcher' : 'Starting watcher' });
-    await this.connect();
-    this.schedule(0);
+    try {
+      await this.withTimeout(this.connect(), config.remoteConnectTimeoutMs, 'Remote connection timed out');
+      this.schedule(0);
+    } catch (error) {
+      this.running = false;
+      await this.disconnect();
+      this.status({
+        state: 'error',
+        message: error.message,
+        connected: false,
+        polling: false,
+        lastErrorAt: new Date().toISOString()
+      });
+      throw error;
+    }
   }
 
   async stop() {
@@ -93,7 +106,7 @@ class WatcherRuntime {
     this.status({ state: this.client ? 'polling' : 'reconnecting', message: 'Polling remote log' });
 
     try {
-      if (!this.client) await this.connect();
+      if (!this.client) await this.withTimeout(this.connect(), config.remoteConnectTimeoutMs, 'Remote connection timed out');
       await this.pollOnce();
       this.polling = false;
       this.schedule(this.getPollIntervalSeconds() * 1000);
@@ -113,6 +126,20 @@ class WatcherRuntime {
 
   getPollIntervalSeconds() {
     return this.options.pollIntervalSeconds || this.watcher.pollIntervalSeconds;
+  }
+
+  async withTimeout(promise, timeoutMs, message) {
+    let timeout;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+        })
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async pollOnce() {
@@ -360,8 +387,14 @@ class WatcherManager {
       this.setStatus(watcherId, status);
     });
     this.runtimes.set(Number(id), runtime);
-    await runtime.start();
-    await db.setEnabled(id, true);
+    try {
+      await runtime.start();
+      await db.setEnabled(id, true);
+    } catch (error) {
+      this.runtimes.delete(Number(id));
+      await db.setEnabled(id, false);
+      throw error;
+    }
     return this.getStatus(id);
   }
 
@@ -394,7 +427,12 @@ class WatcherManager {
     );
 
     this.runtimes.set(numericId, runtime);
-    await runtime.start();
+    try {
+      await runtime.start();
+    } catch (error) {
+      this.runtimes.delete(numericId);
+      throw error;
+    }
     return this.getStatus(numericId);
   }
 

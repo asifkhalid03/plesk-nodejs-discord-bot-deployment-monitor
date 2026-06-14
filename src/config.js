@@ -38,6 +38,7 @@ module.exports = {
   deploymentBlockIdleFlushSeconds: nonNegativeNumberEnv('DEPLOYMENT_BLOCK_IDLE_FLUSH_SECONDS', 45),
   deploymentBlockForceAttachment: booleanEnv('DEPLOYMENT_BLOCK_FORCE_ATTACHMENT', true),
   webhookTriggerPollIntervalSeconds: numberEnv('WEBHOOK_TRIGGER_POLL_INTERVAL_SECONDS', 10),
+  remoteConnectTimeoutMs: numberEnv('REMOTE_CONNECT_TIMEOUT_MS', 30000),
   compressLargeLogAttachments: booleanEnv('COMPRESS_LARGE_LOG_ATTACHMENTS', true),
   trustProxy: booleanEnv('TRUST_PROXY', false),
   ipRestrict: booleanEnv('IP_RESTRICT', false),
