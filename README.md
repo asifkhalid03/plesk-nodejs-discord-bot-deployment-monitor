@@ -1,13 +1,13 @@
 # Discord Remote Log Watcher
 
-A Node.js Discord bot with a small web UI for polling remote FTP/SFTP deployment logs and forwarding newly appended log lines to Discord channels.
+A Node.js app with a small web UI for polling remote FTP/SFTP deployment logs. Discord delivery and report commands are optional integrations.
 
 ## Features
 
 - Add, edit, delete, start, and stop multiple log watchers.
 - Supports SFTP via `ssh2-sftp-client` and FTP via `basic-ftp`.
 - Polls remote log files like `tail -f`.
-- Sends each new log line to a configured Discord channel.
+- Optionally sends each new log line to a configured Discord channel.
 - Handles reconnects, truncation, and log rotation.
 - Persists watcher config and offsets in SQLite.
 - Encrypts stored passwords and private keys using AES-256-GCM.
@@ -15,7 +15,9 @@ A Node.js Discord bot with a small web UI for polling remote FTP/SFTP deployment
 - Includes test connection and test Discord message actions.
 - Optional Daily Reports Bot feature with web UI start/stop controls and slash commands for TXT/PDF reports.
 
-## Discord Setup
+## Optional Discord Setup
+
+Skip this section if you only want the web UI and remote log polling. Discord features stay disabled until `DISCORD_BOT_TOKEN` or `DISCORD_TOKEN` is provided.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create an application, then create a bot for it.
@@ -45,12 +47,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 Required variables:
 
 - `ENCRYPTION_KEY`: Base64, hex, or plain string with enough entropy. Used to encrypt stored FTP/SFTP secrets.
-- `DISCORD_BOT_TOKEN`: Discord bot token. Alias: `DISCORD_TOKEN`.
 
 Optional variables:
 
 - `PORT`: Web UI/API port. Defaults to `3000`.
 - `DATABASE_PATH`: SQLite file path. Defaults to `./data/app.db`.
+- `DISCORD_BOT_TOKEN`: Discord bot token. Alias: `DISCORD_TOKEN`. Enables Discord message delivery and channel clearing.
 - `DISCORD_GUILD_ID`: Used to resolve channel names. Alias: `GUILD_ID`.
 - `DISCORD_CLIENT_ID`: Discord application/client ID. Alias: `CLIENT_ID`.
 - `DAILY_REPORTS_CHANNEL_ID`: Source channel where daily reports are posted.
@@ -60,8 +62,8 @@ Optional variables:
 - `MAX_DISCORD_MESSAGE_LENGTH`: Defaults to `1900`.
 - `LARGE_LOG_ATTACHMENT_LINE_THRESHOLD`: Defaults to `60`. Larger poll bursts are sent as a file instead of many messages.
 - `COMPRESS_LARGE_LOG_ATTACHMENTS`: Defaults to `true`. Sends large bursts as `.log.gz` so Discord does not render a slow inline preview.
-- `UI_LOGIN_EMAIL`: Email used for the web UI login page.
-- `UI_LOGIN_PASSWORD`: Password used for the web UI login page.
+- `UI_LOGIN_EMAIL`: Email used for the web UI login page. Login is disabled unless both this and `UI_LOGIN_PASSWORD` are set.
+- `UI_LOGIN_PASSWORD`: Password used for the web UI login page. Login is disabled unless both this and `UI_LOGIN_EMAIL` are set.
 - `UI_SESSION_SECRET`: Secret used to sign UI session cookies. Generate it like `ENCRYPTION_KEY`.
 - `IP_RESTRICT`: Set to `true` to allow only IPs in `IP_ALLOWLIST`.
 - `IP_ALLOWLIST`: Comma-separated allowed IP addresses, for example `127.0.0.1,192.168.1.20`.
@@ -69,7 +71,7 @@ Optional variables:
 
 ## Web UI Access Control
 
-The web UI and API require login when `UI_LOGIN_EMAIL` and `UI_LOGIN_PASSWORD` are set.
+The web UI and API require login only when both `UI_LOGIN_EMAIL` and `UI_LOGIN_PASSWORD` are set. If either value is empty, login is disabled and `/login` redirects to the app.
 
 To restrict access by IP too:
 
@@ -103,7 +105,7 @@ http://localhost:3000
 1. Install Node.js 20 LTS or newer.
 2. Clone or upload this project.
 3. Run `npm install --omit=dev`.
-4. Create `.env` with `DISCORD_BOT_TOKEN` or `DISCORD_TOKEN`, plus `ENCRYPTION_KEY`.
+4. Create `.env` with `ENCRYPTION_KEY`. Add `DISCORD_BOT_TOKEN` or `DISCORD_TOKEN` only if you want Discord features.
 5. Start with a process manager:
 
 ```bash
@@ -150,6 +152,8 @@ Discord bulk deletion only works for messages newer than 14 days. Older messages
 - For timestamped deployment files, use a wildcard path such as `/httpdocs/deployment/deploy-*.log`. The watcher resolves the newest matching filename on each poll and switches when a newer log appears.
 - If the connection drops, the watcher retries automatically.
 - Partial lines are buffered until they end with a newline.
+- The UI shows whether global Discord integration is configured and connected.
+- Each watcher has an `Enable Discord for this watcher` option. When it is off, the watcher still polls logs but skips Discord delivery, channel clearing, and Discord tests.
 
 ## Trigger Webhooks
 
@@ -157,7 +161,7 @@ Each watcher has its own trigger webhook URL in the table. Use `Copy trigger` an
 
 The webhook does not send the posted text to Discord. It tells this app to start reading that watcher's remote `deploy.log` by FTP/SFTP every `WEBHOOK_TRIGGER_POLL_INTERVAL_SECONDS` seconds. The temporary watcher stops when it sees `DEPLOYMENT_BLOCK_END_TEXT`, for example `Deployment finished`.
 
-When a trigger webhook starts a new deployment read, the app first clears recent messages from that watcher's Discord channel using the watcher `Auto clear limit` value.
+When Discord is configured and enabled for the watcher, and the watcher has a Discord channel, a trigger webhook first clears recent messages from that channel using the watcher `Auto clear limit` value.
 
 ```bash
 curl "http://localhost:3000/hooks/YOUR_TOKEN"
@@ -190,7 +194,7 @@ Commands only work in `REPORTS_DOWNLOAD_CHANNEL_ID`. They read messages from `DA
 - Secrets are encrypted at rest with `ENCRYPTION_KEY`. Keep that key private and stable.
 - If you lose or change `ENCRYPTION_KEY`, existing stored secrets cannot be decrypted.
 - Prefer SFTP over FTP. FTP credentials are sent insecurely unless your server supports FTPS, which this simple implementation does not configure.
-- Put this UI behind a trusted network, VPN, reverse proxy auth, or firewall before exposing it publicly. The included UI does not implement user login.
+- If the app is exposed publicly, set `UI_LOGIN_EMAIL`, `UI_LOGIN_PASSWORD`, and `UI_SESSION_SECRET`, or put it behind a trusted network, VPN, reverse proxy auth, or firewall.
 
 ## Project Structure
 

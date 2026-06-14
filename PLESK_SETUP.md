@@ -38,13 +38,23 @@ Add these in Plesk **Node.js > Environment variables**, or upload a `.env` file 
 Required:
 
 ```env
-DISCORD_TOKEN=your_discord_bot_token
-GUILD_ID=your_discord_server_id
 ENCRYPTION_KEY=generate_with_node_crypto
+DATABASE_PATH=./data/app.db
+```
+
+Optional Web UI login:
+
+```env
 UI_LOGIN_EMAIL=admin@example.com
 UI_LOGIN_PASSWORD=strong_password
 UI_SESSION_SECRET=generate_with_node_crypto
-DATABASE_PATH=./data/app.db
+```
+
+Optional Discord features:
+
+```env
+DISCORD_TOKEN=your_discord_bot_token
+GUILD_ID=your_discord_server_id
 ```
 
 Recommended for Plesk/reverse proxy:

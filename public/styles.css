@@ -134,6 +134,31 @@ main {
   color: var(--muted);
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: #fff;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.badge.ok {
+  border-color: #b9dfca;
+  color: var(--ok);
+  background: #f0fbf5;
+}
+
+.badge.warn {
+  border-color: #f1d39c;
+  color: var(--warn);
+  background: #fff8e9;
+}
+
 .tableWrap {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -239,12 +264,35 @@ dialog {
   box-shadow: var(--shadow);
 }
 
+dialog.logDialog {
+  width: min(1100px, calc(100vw - 28px));
+}
+
 dialog::backdrop {
   background: rgba(15, 23, 42, 0.38);
 }
 
 #watcherForm {
   padding: 20px;
+}
+
+.logPanel {
+  padding: 20px;
+}
+
+.liveLogBlock {
+  min-height: 420px;
+  max-height: min(68vh, 720px);
+  margin: 18px 0 0;
+  padding: 14px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #202a3b;
+  color: #d7e0ef;
+  background: #101828;
+  font: 13px/1.5 Consolas, "Liberation Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .dialogHead,

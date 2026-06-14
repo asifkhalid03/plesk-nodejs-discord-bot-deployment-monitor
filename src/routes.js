@@ -3,7 +3,7 @@ const db = require('./db');
 const { testRemoteConnection } = require('./remoteClients');
 
 function validateWatcherPayload(body, { partial = false } = {}) {
-  const required = ['name', 'protocol', 'host', 'port', 'username', 'remotePath', 'discordChannel'];
+  const required = ['name', 'protocol', 'host', 'port', 'username', 'remotePath'];
   for (const field of required) {
     if (!partial && (body[field] === undefined || body[field] === '')) {
       throw new Error(`${field} is required.`);
@@ -35,6 +35,13 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     throw new Error('autoClearTime must be a valid time.');
   }
 
+  const discordChannel = String(body.discordChannel || '').trim();
+  const discordEnabled = Boolean(body.discordEnabled);
+  const autoClearEnabled = Boolean(body.autoClearEnabled);
+  if ((discordEnabled || autoClearEnabled) && !discordChannel) {
+    throw new Error('discordChannel is required when Discord is enabled for a watcher.');
+  }
+
   const autoClearLimit = String(body.autoClearLimit || '100').trim().toLowerCase();
   if (autoClearLimit !== 'all' && (!/^\d+$/.test(autoClearLimit) || Number(autoClearLimit) < 1)) {
     throw new Error('autoClearLimit must be a positive number or "all".');
@@ -49,10 +56,11 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     password: body.password === undefined || body.password === '' ? undefined : String(body.password),
     privateKey: body.privateKey === undefined || body.privateKey === '' ? undefined : String(body.privateKey),
     remotePath: String(body.remotePath || '').trim(),
-    discordChannel: String(body.discordChannel || '').trim(),
+    discordChannel,
+    discordEnabled,
     pollIntervalSeconds,
     enabled: Boolean(body.enabled),
-    autoClearEnabled: Boolean(body.autoClearEnabled),
+    autoClearEnabled: autoClearEnabled && discordEnabled,
     autoClearTime,
     autoClearLimit
   };
@@ -164,10 +172,22 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     }
   });
 
+  router.get('/watchers/:id/logs', async (req, res, next) => {
+    try {
+      const watcher = await db.getWatcher(req.params.id);
+      if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      res.json(watcherManager.getLogs(req.params.id));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/watchers/:id/test-discord', async (req, res, next) => {
     try {
       const watcher = await db.getWatcher(req.params.id);
       if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      if (!watcher.discordEnabled) return res.status(400).json({ error: 'Discord is disabled for this watcher.' });
+      if (!watcher.discordChannel) return res.status(400).json({ error: 'Discord channel is not configured for this watcher.' });
       await discordService.send(
         watcher.discordChannel,
         discordService.formatLogLine(watcher.name, 'Test message from Discord Remote Log Watcher.')
@@ -182,6 +202,8 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     try {
       const watcher = await db.getWatcher(req.params.id);
       if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      if (!watcher.discordEnabled) return res.status(400).json({ error: 'Discord is disabled for this watcher.' });
+      if (!watcher.discordChannel) return res.status(400).json({ error: 'Discord channel is not configured for this watcher.' });
       const deleted = await discordService.clearRecentMessages(
         watcher.discordChannel,
         req.body?.limit || 100
@@ -204,6 +226,10 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
 
   router.get('/status', (req, res) => {
     res.json({ statuses: watcherManager.getStatuses() });
+  });
+
+  router.get('/discord/status', (req, res) => {
+    res.json({ status: discordService.getStatus() });
   });
 
   router.get('/report-bot/status', (req, res) => {

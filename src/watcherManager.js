@@ -1,6 +1,6 @@
 const db = require('./db');
 const config = require('./config');
-const { createRemoteClient, resolveRemotePath } = require('./remoteClients');
+const { createRemoteClient, resolveRemotePath, isRemotePathNotFoundError } = require('./remoteClients');
 
 class WatcherRuntime {
   constructor(watcher, discordService, onStatus, options = {}) {
@@ -8,6 +8,7 @@ class WatcherRuntime {
     this.discordService = discordService;
     this.onStatus = onStatus;
     this.options = options;
+    this.onLog = options.onLog || (() => {});
     this.client = null;
     this.timer = null;
     this.running = false;
@@ -68,8 +69,33 @@ class WatcherRuntime {
     await this.disconnect();
     this.client = createRemoteClient(this.watcher);
     await this.client.connect();
-    this.currentRemotePath = await resolveRemotePath(this.client, this.watcher.remotePath);
-    const stat = await this.client.stat(this.currentRemotePath);
+    try {
+      this.currentRemotePath = await resolveRemotePath(this.client, this.watcher.remotePath);
+    } catch (error) {
+      if (!isRemotePathNotFoundError(error)) throw error;
+      this.reconnectDelayMs = 2000;
+      this.status({
+        state: 'waiting',
+        message: `Connected; waiting for remote log file ${this.watcher.remotePath}`,
+        lastUpdateAt: new Date().toISOString()
+      });
+      return;
+    }
+
+    let stat;
+    try {
+      stat = await this.client.stat(this.currentRemotePath);
+    } catch (error) {
+      if (!isRemotePathNotFoundError(error)) throw error;
+      this.reconnectDelayMs = 2000;
+      this.status({
+        state: 'waiting',
+        message: `Connected; waiting for remote log file ${this.currentRemotePath}`,
+        lastUpdateAt: new Date().toISOString()
+      });
+      return;
+    }
+
     if (!this.watcher.lastOffset && !this.watcher.lastRemotePath) {
       this.watcher.lastOffset = stat.size;
       this.watcher.lastRemotePath = this.currentRemotePath;
@@ -128,6 +154,10 @@ class WatcherRuntime {
     return this.options.pollIntervalSeconds || this.watcher.pollIntervalSeconds;
   }
 
+  hasDiscordTarget() {
+    return this.discordService.isConfigured() && this.watcher.discordEnabled && Boolean(this.watcher.discordChannel);
+  }
+
   async withTimeout(promise, timeoutMs, message) {
     let timeout;
     try {
@@ -143,7 +173,20 @@ class WatcherRuntime {
   }
 
   async pollOnce() {
-    const resolvedPath = await resolveRemotePath(this.client, this.watcher.remotePath);
+    let resolvedPath;
+    try {
+      resolvedPath = await resolveRemotePath(this.client, this.watcher.remotePath);
+    } catch (error) {
+      if (!isRemotePathNotFoundError(error)) throw error;
+      this.status({
+        state: 'waiting',
+        message: `Waiting for remote log file ${this.watcher.remotePath}`,
+        lastUpdateAt: new Date().toISOString(),
+        lastOffset: this.watcher.lastOffset || 0
+      });
+      return;
+    }
+
     let offset = this.watcher.lastOffset || 0;
     let partial = this.watcher.partialLine || '';
 
@@ -158,7 +201,19 @@ class WatcherRuntime {
     }
 
     this.currentRemotePath = resolvedPath;
-    const stat = await this.client.stat(this.currentRemotePath);
+    let stat;
+    try {
+      stat = await this.client.stat(this.currentRemotePath);
+    } catch (error) {
+      if (!isRemotePathNotFoundError(error)) throw error;
+      this.status({
+        state: 'waiting',
+        message: `Waiting for remote log file ${this.currentRemotePath}`,
+        lastUpdateAt: new Date().toISOString(),
+        lastOffset: offset
+      });
+      return;
+    }
 
     if (stat.size < offset) {
       offset = 0;
@@ -180,11 +235,26 @@ class WatcherRuntime {
       return;
     }
 
-    const chunk = await this.client.readRange(this.currentRemotePath, offset, stat.size - 1);
+    let chunk;
+    try {
+      chunk = await this.client.readRange(this.currentRemotePath, offset, stat.size - 1);
+    } catch (error) {
+      if (!isRemotePathNotFoundError(error)) throw error;
+      this.status({
+        state: 'waiting',
+        message: `Waiting for remote log file ${this.currentRemotePath}`,
+        lastUpdateAt: new Date().toISOString(),
+        lastOffset: offset
+      });
+      return;
+    }
+
     const text = partial + chunk.toString('utf8');
     const endsWithNewline = /\r?\n$/.test(text);
     const lines = text.split(/\r?\n/);
     partial = endsWithNewline ? '' : lines.pop() || '';
+    if (endsWithNewline && lines[lines.length - 1] === '') lines.pop();
+    this.onLog(this.watcher.id, lines);
 
     const result = await this.handleLogLines(lines);
 
@@ -194,7 +264,9 @@ class WatcherRuntime {
     await db.saveProgress(this.watcher.id, stat.size, partial, this.currentRemotePath);
     this.status({
       state: 'connected',
-      message: result.bufferedCount
+      message: result.skippedCount
+        ? `Skipped ${result.skippedCount} Discord line(s); Discord is not configured for this watcher`
+        : result.bufferedCount
         ? `Buffered ${result.bufferedCount} deployment line(s)`
         : `Sent ${result.sentCount} line(s)`,
       lastUpdateAt: new Date().toISOString(),
@@ -212,13 +284,21 @@ class WatcherRuntime {
   }
 
   async handleLogLines(lines) {
+    const nonEmptyLineCount = lines.filter((line) => String(line).trim()).length;
+    if (!this.hasDiscordTarget()) {
+      if (config.deploymentBlockEndText) {
+        this.finishSeen = this.finishSeen || lines.some((line) => String(line).includes(config.deploymentBlockEndText));
+      }
+      return { sentCount: 0, bufferedCount: 0, skippedCount: nonEmptyLineCount };
+    }
+
     if (!config.bufferDeploymentBlocks) {
       const sentCount = await this.discordService.sendLogLines(
         this.watcher.discordChannel,
         this.watcher.name,
         lines
       );
-      return { sentCount, bufferedCount: 0 };
+      return { sentCount, bufferedCount: 0, skippedCount: 0 };
     }
 
     let sentCount = 0;
@@ -259,7 +339,7 @@ class WatcherRuntime {
       );
     }
 
-    return { sentCount, bufferedCount: this.deploymentBuffer.length };
+    return { sentCount, bufferedCount: this.deploymentBuffer.length, skippedCount: 0 };
   }
 
   async flushDeploymentBufferIfIdle() {
@@ -275,6 +355,14 @@ class WatcherRuntime {
     const lines = this.deploymentBuffer;
     this.deploymentBuffer = [];
     this.deploymentBufferUpdatedAt = 0;
+    if (!this.hasDiscordTarget()) {
+      this.status({
+        state: 'connected',
+        message: `Skipped deployment block (${reason}); Discord is not configured for this watcher`,
+        lastUpdateAt: new Date().toISOString()
+      });
+      return 0;
+    }
     const sentCount = config.deploymentBlockForceAttachment
       ? await this.discordService.sendLogAttachment(this.watcher.discordChannel, this.watcher.name, lines)
       : await this.discordService.sendLogLines(this.watcher.discordChannel, this.watcher.name, lines);
@@ -292,6 +380,8 @@ class WatcherManager {
     this.discordService = discordService;
     this.runtimes = new Map();
     this.statuses = new Map();
+    this.logBuffers = new Map();
+    this.maxLogLines = 5000;
     this.autoClearTimer = null;
   }
 
@@ -329,6 +419,8 @@ class WatcherManager {
   }
 
   async runAutoClearDueWatchers(now = new Date()) {
+    if (!this.discordService.isConfigured()) return;
+
     const hh = String(now.getHours()).padStart(2, '0');
     const mm = String(now.getMinutes()).padStart(2, '0');
     const currentTime = `${hh}:${mm}`;
@@ -337,6 +429,8 @@ class WatcherManager {
 
     for (const watcher of watchers) {
       if (!watcher.autoClearEnabled) continue;
+      if (!watcher.discordEnabled) continue;
+      if (!watcher.discordChannel) continue;
       if (watcher.autoClearTime !== currentTime) continue;
       if (watcher.autoClearLastRunDate === today) continue;
 
@@ -379,12 +473,49 @@ class WatcherManager {
     this.statuses.set(Number(id), { ...previous, ...status });
   }
 
+  appendLogs(id, lines) {
+    const numericId = Number(id);
+    const entries = lines
+      .filter((line) => line !== undefined)
+      .map((line) => ({
+        at: new Date().toISOString(),
+        line: String(line)
+      }));
+    if (entries.length === 0) return;
+
+    const buffer = this.logBuffers.get(numericId) || [];
+    buffer.push(...entries);
+    if (buffer.length > this.maxLogLines) {
+      buffer.splice(0, buffer.length - this.maxLogLines);
+    }
+    this.logBuffers.set(numericId, buffer);
+  }
+
+  clearLogs(id) {
+    this.logBuffers.set(Number(id), []);
+  }
+
+  getLogs(id) {
+    const numericId = Number(id);
+    const lines = this.logBuffers.get(numericId) || [];
+    return {
+      watcherId: numericId,
+      lines,
+      maxLines: this.maxLogLines,
+      truncated: lines.length >= this.maxLogLines,
+      status: this.getStatus(numericId)
+    };
+  }
+
   async start(id) {
     await this.stop(id, { persist: false });
+    this.clearLogs(id);
     const watcher = await db.getWatcher(id, { includeSecrets: true });
     if (!watcher) throw new Error('Watcher not found.');
     const runtime = new WatcherRuntime(watcher, this.discordService, (watcherId, status) => {
       this.setStatus(watcherId, status);
+    }, {
+      onLog: (watcherId, lines) => this.appendLogs(watcherId, lines)
     });
     this.runtimes.set(Number(id), runtime);
     try {
@@ -412,8 +543,11 @@ class WatcherManager {
 
     const watcher = await db.getWatcher(id, { includeSecrets: true });
     if (!watcher) throw new Error('Watcher not found.');
+    this.clearLogs(numericId);
 
-    await this.clearChannelForDeployment(watcher);
+    if (this.discordService.isConfigured() && watcher.discordEnabled && watcher.discordChannel) {
+      await this.clearChannelForDeployment(watcher);
+    }
 
     const runtime = new WatcherRuntime(
       watcher,
@@ -424,7 +558,8 @@ class WatcherManager {
       },
       {
         stopWhenFinished: true,
-        pollIntervalSeconds: config.webhookTriggerPollIntervalSeconds
+        pollIntervalSeconds: config.webhookTriggerPollIntervalSeconds,
+        onLog: (watcherId, lines) => this.appendLogs(watcherId, lines)
       }
     );
 

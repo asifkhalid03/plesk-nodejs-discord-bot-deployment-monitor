@@ -25,6 +25,7 @@ async function initDb() {
       private_key_encrypted TEXT,
       remote_path TEXT NOT NULL,
       discord_channel TEXT NOT NULL,
+      discord_enabled INTEGER NOT NULL DEFAULT 0,
       poll_interval_seconds INTEGER NOT NULL DEFAULT 5,
       enabled INTEGER NOT NULL DEFAULT 0,
       last_offset INTEGER NOT NULL DEFAULT 0,
@@ -40,11 +41,13 @@ async function initDb() {
     );
   `);
   await ensureColumn('watchers', 'last_remote_path', 'TEXT');
+  await ensureColumn('watchers', 'discord_enabled', 'INTEGER NOT NULL DEFAULT 0');
   await ensureColumn('watchers', 'auto_clear_enabled', 'INTEGER NOT NULL DEFAULT 0');
   await ensureColumn('watchers', 'auto_clear_time', "TEXT NOT NULL DEFAULT '00:00'");
   await ensureColumn('watchers', 'auto_clear_limit', "TEXT NOT NULL DEFAULT '100'");
   await ensureColumn('watchers', 'auto_clear_last_run_date', 'TEXT');
   await ensureColumn('watchers', 'webhook_token', 'TEXT');
+  await db.run('UPDATE watchers SET discord_enabled = 1 WHERE discord_enabled = 0 AND discord_channel != ""');
   await backfillWebhookTokens();
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_watchers_webhook_token ON watchers(webhook_token)');
   return db;
@@ -81,6 +84,7 @@ function publicWatcher(row) {
     hasPrivateKey: Boolean(row.private_key_encrypted),
     remotePath: row.remote_path,
     discordChannel: row.discord_channel,
+    discordEnabled: Boolean(row.discord_enabled),
     pollIntervalSeconds: row.poll_interval_seconds,
     enabled: Boolean(row.enabled),
     lastOffset: row.last_offset,
@@ -125,9 +129,9 @@ async function createWatcher(input) {
   const result = await db.run(
     `INSERT INTO watchers (
       name, protocol, host, port, username, password_encrypted, private_key_encrypted,
-      remote_path, discord_channel, poll_interval_seconds, enabled,
+      remote_path, discord_channel, discord_enabled, poll_interval_seconds, enabled,
       auto_clear_enabled, auto_clear_time, auto_clear_limit, webhook_token
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.name,
     input.protocol,
     input.host,
@@ -137,6 +141,7 @@ async function createWatcher(input) {
     encryptSecret(input.privateKey),
     input.remotePath,
     input.discordChannel,
+    input.discordEnabled ? 1 : 0,
     input.pollIntervalSeconds,
     input.enabled ? 1 : 0,
     input.autoClearEnabled ? 1 : 0,
@@ -160,7 +165,7 @@ async function updateWatcher(id, input) {
     `UPDATE watchers SET
       name = ?, protocol = ?, host = ?, port = ?, username = ?,
       password_encrypted = ?, private_key_encrypted = ?, remote_path = ?,
-      discord_channel = ?, poll_interval_seconds = ?, enabled = ?,
+      discord_channel = ?, discord_enabled = ?, poll_interval_seconds = ?, enabled = ?,
       auto_clear_enabled = ?, auto_clear_time = ?, auto_clear_limit = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
@@ -173,6 +178,7 @@ async function updateWatcher(id, input) {
     privateKeyEncrypted,
     input.remotePath,
     input.discordChannel,
+    input.discordEnabled ? 1 : 0,
     input.pollIntervalSeconds,
     input.enabled ? 1 : 0,
     input.autoClearEnabled ? 1 : 0,

@@ -24,7 +24,7 @@ async function main() {
   const reportBotService = new ReportBotService(discordService);
   registerRoutes(app, watcherManager, discordService, reportBotService);
   await watcherManager.startEnabledWatchers();
-  if (config.reportBotAutoStart) {
+  if (config.reportBotAutoStart && discordService.isConfigured()) {
     reportBotService.start().catch((error) => {
       console.error('Report bot auto-start failed:', error.message);
     });

@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Discord Log Watcher</title>
+    <title>Deployment Log Watcher</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <h1>Discord Log Watcher</h1>
-        <p>Poll remote deployment logs and forward new lines to Discord.</p>
+        <h1>Deployment Log Watcher</h1>
+        <p>Poll remote deployment logs with optional Discord delivery.</p>
       </div>
       <div class="topActions">
         <button id="logoutBtn">Logout</button>
@@ -19,6 +19,14 @@
     </header>
 
     <main>
+      <section class="featureBar">
+        <div>
+          <h2>Discord Integration</h2>
+          <p id="discordSummary">Loading Discord status...</p>
+        </div>
+        <span id="discordBadge" class="badge">Checking</span>
+      </section>
+
       <section class="featureBar">
         <div>
           <h2>Daily Reports Bot</h2>
@@ -110,7 +118,12 @@
 
           <label>
             Discord channel ID or name
-            <input id="discordChannel" required placeholder="123456789012345678" />
+            <input id="discordChannel" placeholder="Optional, e.g. 123456789012345678" />
+          </label>
+
+          <label class="check">
+            <input id="discordEnabled" type="checkbox" />
+            Enable Discord for this watcher
           </label>
 
           <label>
@@ -146,6 +159,19 @@
           <button type="submit" class="primary">Save watcher</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="logDialog" class="logDialog">
+      <div class="logPanel">
+        <div class="dialogHead">
+          <div>
+            <h2 id="logDialogTitle">Live log</h2>
+            <p id="logDialogSummary" class="subtle">Waiting for log lines...</p>
+          </div>
+          <button type="button" id="closeLogDialogBtn" class="iconBtn" aria-label="Close">x</button>
+        </div>
+        <pre id="liveLogBlock" class="liveLogBlock"><code>No log lines captured yet.</code></pre>
+      </div>
     </dialog>
 
     <div id="toast" class="toast hidden"></div>

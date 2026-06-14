@@ -4,6 +4,29 @@ const SftpClient = require('ssh2-sftp-client');
 const ftp = require('basic-ftp');
 const config = require('./config');
 
+class RemotePathNotFoundError extends Error {
+  constructor(remotePath, cause) {
+    super(`Remote path not found: ${remotePath}`);
+    this.name = 'RemotePathNotFoundError';
+    this.code = 'REMOTE_PATH_NOT_FOUND';
+    this.remotePath = remotePath;
+    this.cause = cause;
+  }
+}
+
+function isRemotePathNotFoundError(error) {
+  if (error?.code === 'REMOTE_PATH_NOT_FOUND') return true;
+  if (error?.code === 550 || error?.code === '550') return true;
+  return /no such file|not found|no such path|does not exist/i.test(String(error?.message || ''));
+}
+
+function wrapRemotePathNotFound(remotePath, error) {
+  if (isRemotePathNotFoundError(error)) {
+    throw new RemotePathNotFoundError(remotePath, error);
+  }
+  throw error;
+}
+
 async function streamToBuffer(stream) {
   const chunks = [];
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
@@ -28,8 +51,12 @@ class SftpRemoteClient {
   }
 
   async stat(remotePath) {
-    const info = await this.client.stat(remotePath);
-    return { size: info.size };
+    try {
+      const info = await this.client.stat(remotePath);
+      return { size: info.size };
+    } catch (error) {
+      wrapRemotePathNotFound(remotePath, error);
+    }
   }
 
   async list(remoteDir) {
@@ -41,12 +68,16 @@ class SftpRemoteClient {
 
   async readRange(remotePath, start, endInclusive) {
     if (endInclusive < start) return Buffer.alloc(0);
-    const stream = await this.client.createReadStream(remotePath, {
-      start,
-      end: endInclusive,
-      autoClose: true
-    });
-    return streamToBuffer(stream);
+    try {
+      const stream = await this.client.createReadStream(remotePath, {
+        start,
+        end: endInclusive,
+        autoClose: true
+      });
+      return streamToBuffer(stream);
+    } catch (error) {
+      wrapRemotePathNotFound(remotePath, error);
+    }
   }
 
   async close() {
@@ -76,11 +107,15 @@ class FtpRemoteClient {
   }
 
   async stat(remotePath) {
-    const actualPath = await this.resolveFtpPath(remotePath, async (candidate) => {
-      const size = await this.client.size(candidate);
-      return { size };
-    });
-    return actualPath.result;
+    try {
+      const actualPath = await this.resolveFtpPath(remotePath, async (candidate) => {
+        const size = await this.client.size(candidate);
+        return { size };
+      });
+      return actualPath.result;
+    } catch (error) {
+      wrapRemotePathNotFound(remotePath, error);
+    }
   }
 
   async list(remoteDir) {
@@ -99,11 +134,15 @@ class FtpRemoteClient {
         callback();
       }
     });
-    const actualPath = await this.resolveFtpPath(remotePath, async (candidate) => {
-      await this.client.downloadTo(writable, candidate, start);
-      return candidate;
-    });
-    return Buffer.concat(chunks).subarray(0, endInclusive - start + 1);
+    try {
+      const actualPath = await this.resolveFtpPath(remotePath, async (candidate) => {
+        await this.client.downloadTo(writable, candidate, start);
+        return candidate;
+      });
+      return Buffer.concat(chunks).subarray(0, endInclusive - start + 1);
+    } catch (error) {
+      wrapRemotePathNotFound(remotePath, error);
+    }
   }
 
   async resolveFtpPath(remotePath, operation) {
@@ -154,7 +193,7 @@ async function resolveRemotePath(client, remotePath) {
     });
 
   if (matches.length === 0) {
-    throw new Error(`No remote log files match ${remotePath}`);
+    throw new RemotePathNotFoundError(remotePath);
   }
 
   return path.join(dir, matches[0].name);
@@ -172,4 +211,10 @@ async function testRemoteConnection(watcher) {
   }
 }
 
-module.exports = { createRemoteClient, resolveRemotePath, testRemoteConnection };
+module.exports = {
+  createRemoteClient,
+  resolveRemotePath,
+  testRemoteConnection,
+  RemotePathNotFoundError,
+  isRemotePathNotFoundError
+};

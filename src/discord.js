@@ -12,10 +12,26 @@ class DiscordService {
     this.retryDelayMs = 5000;
   }
 
-  async start() {
-    if (!config.discordBotToken) {
-      throw new Error('DISCORD_BOT_TOKEN is required.');
+  isConfigured() {
+    return Boolean(config.discordBotToken);
+  }
+
+  getStatus() {
+    return {
+      configured: this.isConfigured(),
+      ready: this.ready,
+      loginInProgress: this.loginInProgress
+    };
+  }
+
+  ensureConfigured() {
+    if (!this.isConfigured()) {
+      throw new Error('Discord is not configured. Set DISCORD_BOT_TOKEN to enable Discord features.');
     }
+  }
+
+  async start() {
+    this.ensureConfigured();
 
     if (this.client) {
       await this.client.destroy().catch(() => {});
@@ -49,6 +65,10 @@ class DiscordService {
   }
 
   startInBackground() {
+    if (!this.isConfigured()) {
+      return;
+    }
+
     this.tryLogin().catch((error) => {
       console.error('Discord background login failed:', error.message);
     });
@@ -95,6 +115,7 @@ class DiscordService {
   }
 
   async waitUntilReady(timeoutMs = 30000) {
+    this.ensureConfigured();
     if (this.ready && this.client) return this.client;
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -108,6 +129,7 @@ class DiscordService {
   }
 
   async resolveChannel(channelRef) {
+    this.ensureConfigured();
     if (!this.ready) {
       throw new Error('Discord client is not ready yet.');
     }

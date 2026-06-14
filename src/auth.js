@@ -29,6 +29,10 @@ function getClientIp(req) {
   return normalizeIp(forwarded || req.ip || req.socket.remoteAddress);
 }
 
+function isLocalRequest(req) {
+  return ['127.0.0.1', 'localhost'].includes(getClientIp(req));
+}
+
 function safeEqual(left, right) {
   const a = Buffer.from(String(left || ''));
   const b = Buffer.from(String(right || ''));
@@ -67,6 +71,10 @@ function wantsJson(req) {
   return req.path.startsWith('/api/') || String(req.headers.accept || '').includes('application/json');
 }
 
+function isLoginConfigured() {
+  return Boolean(config.uiLoginEmail && config.uiLoginPassword);
+}
+
 function registerAuth(app) {
   if (config.trustProxy) app.set('trust proxy', true);
 
@@ -79,13 +87,14 @@ function registerAuth(app) {
   });
 
   app.get('/login', (req, res) => {
+    if (!isLoginConfigured()) return res.redirect('/');
     if (readSession(req)) return res.redirect('/');
     return res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
   });
 
   app.post('/api/auth/login', (req, res) => {
-    if (!config.uiLoginEmail || !config.uiLoginPassword) {
-      return res.status(500).json({ error: 'UI login is not configured.' });
+    if (!isLoginConfigured()) {
+      return res.json({ ok: true, authenticated: false });
     }
 
     const email = String(req.body?.email || '');
@@ -113,11 +122,26 @@ function registerAuth(app) {
   });
 
   app.get('/api/auth/status', (req, res) => {
+    if (!isLoginConfigured()) {
+      return res.json({ authConfigured: false, authenticated: false, email: null });
+    }
+
     const session = readSession(req);
-    return res.json({ authenticated: Boolean(session), email: session?.email || null });
+    return res.json({ authConfigured: true, authenticated: Boolean(session), email: session?.email || null });
+  });
+
+  app.get('/api/auth/debug', (req, res) => {
+    if (!isLocalRequest(req)) return res.status(404).json({ error: 'Not found.' });
+    return res.json({
+      authConfigured: isLoginConfigured(),
+      configuredEmail: config.uiLoginEmail || null,
+      passwordLength: config.uiLoginPassword.length,
+      sessionSecretSet: Boolean(config.uiSessionSecret)
+    });
   });
 
   app.use((req, res, next) => {
+    if (!isLoginConfigured()) return next();
     if (req.path === '/login.html' || req.path === '/styles.css' || req.path.startsWith('/hooks/')) return next();
     if (readSession(req)) return next();
     if (wantsJson(req)) return res.status(401).json({ error: 'Login required.' });

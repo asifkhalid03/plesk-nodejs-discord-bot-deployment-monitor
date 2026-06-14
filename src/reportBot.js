@@ -56,6 +56,10 @@ class ReportBotService {
   }
 
   async start() {
+    if (!config.discordBotToken) {
+      throw new Error('Discord is not configured. Set DISCORD_BOT_TOKEN to enable report bot features.');
+    }
+
     if (!this.isConfigured()) {
       throw new Error('Report bot is missing CLIENT_ID, GUILD_ID, DAILY_REPORTS_CHANNEL_ID, or REPORTS_DOWNLOAD_CHANNEL_ID.');
     }

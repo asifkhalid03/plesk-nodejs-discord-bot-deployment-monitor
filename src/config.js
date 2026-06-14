@@ -1,5 +1,13 @@
 const path = require('path');
-require('dotenv').config();
+const dotenvResult = require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const fileEnv = dotenvResult.parsed || {};
+
+function stringEnv(name, { preferFile = false } = {}) {
+  if (preferFile && Object.prototype.hasOwnProperty.call(fileEnv, name)) {
+    return fileEnv[name];
+  }
+  return process.env[name] || '';
+}
 
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
@@ -26,7 +34,7 @@ function listEnv(name) {
 module.exports = {
   port: numberEnv('PORT', 3000),
   databasePath: process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'app.db'),
-  encryptionKey: process.env.ENCRYPTION_KEY || '',
+  encryptionKey: stringEnv('ENCRYPTION_KEY', { preferFile: true }),
   discordBotToken: process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || '',
   discordClientId: process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '',
   discordGuildId: process.env.DISCORD_GUILD_ID || process.env.GUILD_ID || '',
@@ -48,7 +56,9 @@ module.exports = {
   trustProxy: booleanEnv('TRUST_PROXY', false),
   ipRestrict: booleanEnv('IP_RESTRICT', false),
   ipAllowlist: listEnv('IP_ALLOWLIST'),
-  uiLoginEmail: process.env.UI_LOGIN_EMAIL || '',
-  uiLoginPassword: process.env.UI_LOGIN_PASSWORD || '',
-  uiSessionSecret: process.env.UI_SESSION_SECRET || process.env.ENCRYPTION_KEY || ''
+  uiLoginEmail: stringEnv('UI_LOGIN_EMAIL', { preferFile: true }),
+  uiLoginPassword: stringEnv('UI_LOGIN_PASSWORD', { preferFile: true }),
+  uiSessionSecret:
+    stringEnv('UI_SESSION_SECRET', { preferFile: true }) ||
+    stringEnv('ENCRYPTION_KEY', { preferFile: true })
 };
