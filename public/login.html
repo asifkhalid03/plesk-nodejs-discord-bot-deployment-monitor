@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login - Discord Log Watcher</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="loginPage">
+    <main class="loginShell">
+      <form id="loginForm" class="loginPanel">
+        <h1>Discord Log Watcher</h1>
+        <p>Sign in to manage watchers and Discord channel actions.</p>
+
+        <label>
+          Email
+          <input id="email" type="email" autocomplete="username" required />
+        </label>
+
+        <label>
+          Password
+          <input id="password" type="password" autocomplete="current-password" required />
+        </label>
+
+        <div id="loginError" class="error hidden"></div>
+        <button type="submit" class="primary">Login</button>
+      </form>
+    </main>
+
+    <script>
+      const form = document.querySelector('#loginForm');
+      const errorBox = document.querySelector('#loginError');
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        errorBox.classList.add('hidden');
+
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.querySelector('#email').value,
+            password: document.querySelector('#password').value
+          })
+        });
+
+        if (response.ok) {
+          window.location.href = '/';
+          return;
+        }
+
+        const body = await response.json().catch(() => ({}));
+        errorBox.textContent = body.error || 'Login failed.';
+        errorBox.classList.remove('hidden');
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,45 @@
+const express = require('express');
+const path = require('path');
+const config = require('./config');
+const db = require('./db');
+const DiscordService = require('./discord');
+const WatcherManager = require('./watcherManager');
+const registerRoutes = require('./routes');
+const registerAuth = require('./auth');
+
+async function main() {
+  await db.initDb();
+
+  const app = express();
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], limit: '1mb' }));
+  registerAuth(app);
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+
+  const discordService = new DiscordService();
+  discordService.startInBackground();
+
+  const watcherManager = new WatcherManager(discordService);
+  registerRoutes(app, watcherManager, discordService);
+  await watcherManager.startEnabledWatchers();
+
+  const server = app.listen(config.port, () => {
+    console.log(`Web UI listening on http://localhost:${config.port}`);
+  });
+
+  async function shutdown() {
+    console.log('Shutting down...');
+    server.close();
+    await watcherManager.shutdown();
+    await discordService.stop();
+    process.exit(0);
+  }
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

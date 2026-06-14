@@ -1,0 +1,21 @@
+{
+  "name": "discord-remote-log-watcher",
+  "version": "1.0.0",
+  "description": "Discord bot with a web UI for polling remote FTP/SFTP deployment logs.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch src/index.js",
+    "clear-channel": "node scripts/clear-channel.js"
+  },
+  "dependencies": {
+    "basic-ftp": "^5.0.5",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "ssh2-sftp-client": "^11.0.0"
+  }
+}

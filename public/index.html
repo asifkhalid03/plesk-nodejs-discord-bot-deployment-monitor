@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Discord Log Watcher</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Discord Log Watcher</h1>
+        <p>Poll remote deployment logs and forward new lines to Discord.</p>
+      </div>
+      <div class="topActions">
+        <button id="logoutBtn">Logout</button>
+        <button id="addWatcherBtn" class="primary">Add watcher</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="toolbar">
+        <div id="summary">Loading watchers...</div>
+        <button id="refreshBtn">Refresh</button>
+      </section>
+
+      <section class="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Remote</th>
+              <th>Discord</th>
+              <th>Status</th>
+              <th>Last update</th>
+              <th class="actionsCol">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="watchersBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty hidden">
+          No watchers yet. Add one to start tailing a remote deploy log.
+        </div>
+      </section>
+    </main>
+
+    <dialog id="watcherDialog">
+      <form id="watcherForm" method="dialog">
+        <div class="dialogHead">
+          <h2 id="dialogTitle">Add watcher</h2>
+          <button type="button" id="closeDialogBtn" class="iconBtn" aria-label="Close">x</button>
+        </div>
+
+        <input type="hidden" id="watcherId" />
+
+        <div class="grid">
+          <label>
+            Label
+            <input id="name" required placeholder="dev-app" />
+          </label>
+
+          <label>
+            Protocol
+            <select id="protocol">
+              <option value="sftp">SFTP</option>
+              <option value="ftp">FTP</option>
+            </select>
+          </label>
+
+          <label>
+            Host
+            <input id="host" required placeholder="example.com" />
+          </label>
+
+          <label>
+            Port
+            <input id="port" type="number" min="1" max="65535" required value="22" />
+          </label>
+
+          <label>
+            Username
+            <input id="username" required />
+          </label>
+
+          <label>
+            Password
+            <input id="password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing" />
+          </label>
+
+          <label class="wide">
+            Private key
+            <textarea id="privateKey" rows="5" spellcheck="false" placeholder="Optional. Leave blank to keep existing."></textarea>
+          </label>
+
+          <label class="wide">
+            Remote log path
+            <input id="remotePath" required placeholder="deploy.log" />
+          </label>
+
+          <label>
+            Discord channel ID or name
+            <input id="discordChannel" required placeholder="123456789012345678" />
+          </label>
+
+          <label>
+            Poll interval seconds
+            <input id="pollIntervalSeconds" type="number" min="2" value="5" required />
+          </label>
+
+          <label class="check">
+            <input id="autoClearEnabled" type="checkbox" />
+            Auto clear Discord channel daily
+          </label>
+
+          <label>
+            Auto clear time
+            <input id="autoClearTime" type="time" value="00:00" />
+          </label>
+
+          <label>
+            Auto clear limit
+            <input id="autoClearLimit" placeholder="100 or all" value="100" />
+          </label>
+
+          <label class="check">
+            <input id="enabled" type="checkbox" />
+            Start watcher after saving
+          </label>
+        </div>
+
+        <div id="formError" class="error hidden"></div>
+
+        <div class="dialogActions">
+          <button type="button" id="cancelBtn">Cancel</button>
+          <button type="submit" class="primary">Save watcher</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
