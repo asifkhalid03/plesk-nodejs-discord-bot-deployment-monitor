@@ -150,6 +150,8 @@ Each watcher has its own trigger webhook URL in the table. Use `Copy trigger` an
 
 The webhook does not send the posted text to Discord. It tells this app to start reading that watcher's remote `deploy.log` by FTP/SFTP every `WEBHOOK_TRIGGER_POLL_INTERVAL_SECONDS` seconds. The temporary watcher stops when it sees `DEPLOYMENT_BLOCK_END_TEXT`, for example `Deployment finished`.
 
+When a trigger webhook starts a new deployment read, the app first clears recent messages from that watcher's Discord channel using the watcher `Auto clear limit` value.
+
 ```bash
 curl "http://localhost:3000/hooks/YOUR_TOKEN"
 ```

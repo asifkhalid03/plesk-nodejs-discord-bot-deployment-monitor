@@ -413,6 +413,8 @@ class WatcherManager {
     const watcher = await db.getWatcher(id, { includeSecrets: true });
     if (!watcher) throw new Error('Watcher not found.');
 
+    await this.clearChannelForDeployment(watcher);
+
     const runtime = new WatcherRuntime(
       watcher,
       this.discordService,
@@ -434,6 +436,33 @@ class WatcherManager {
       throw error;
     }
     return this.getStatus(numericId);
+  }
+
+  async clearChannelForDeployment(watcher) {
+    const limit = watcher.autoClearLimit || '100';
+    try {
+      const deleted = await this.discordService.clearRecentMessages(watcher.discordChannel, limit);
+      this.setStatus(watcher.id, {
+        id: watcher.id,
+        name: watcher.name,
+        state: 'starting',
+        message: `Cleared ${deleted} channel message(s) for new deployment`,
+        connected: false,
+        polling: false,
+        lastUpdateAt: new Date().toISOString()
+      });
+    } catch (error) {
+      this.setStatus(watcher.id, {
+        id: watcher.id,
+        name: watcher.name,
+        state: 'error',
+        message: `Channel clear failed: ${error.message}`,
+        connected: false,
+        polling: false,
+        lastErrorAt: new Date().toISOString()
+      });
+      throw error;
+    }
   }
 
   async stop(id, { persist = true } = {}) {
