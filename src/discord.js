@@ -6,6 +6,7 @@ class DiscordService {
   constructor() {
     this.client = null;
     this.ready = false;
+    this.readyWaiters = [];
     this.retryTimer = null;
     this.loginInProgress = false;
     this.retryDelayMs = 5000;
@@ -22,13 +23,18 @@ class DiscordService {
 
     this.ready = false;
     this.client = new Client({
-      intents: [GatewayIntentBits.Guilds]
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+      ]
     });
 
     this.client.once('clientReady', () => {
       this.ready = true;
       this.retryDelayMs = 5000;
       console.log(`Discord bot logged in as ${this.client.user.tag}`);
+      this.readyWaiters.splice(0).forEach((resolve) => resolve(this.client));
     });
 
     this.client.on('error', (error) => {
@@ -86,6 +92,19 @@ class DiscordService {
     if (this.client) {
       await this.client.destroy().catch(() => {});
     }
+  }
+
+  async waitUntilReady(timeoutMs = 30000) {
+    if (this.ready && this.client) return this.client;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Discord client is not ready yet.'));
+      }, timeoutMs);
+      this.readyWaiters.push((client) => {
+        clearTimeout(timeout);
+        resolve(client);
+      });
+    });
   }
 
   async resolveChannel(channelRef) {

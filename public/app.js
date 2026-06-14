@@ -6,6 +6,9 @@ const els = {
   addWatcherBtn: document.querySelector('#addWatcherBtn'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
+  reportBotStartBtn: document.querySelector('#reportBotStartBtn'),
+  reportBotStopBtn: document.querySelector('#reportBotStopBtn'),
+  reportBotSummary: document.querySelector('#reportBotSummary'),
   watchersBody: document.querySelector('#watchersBody'),
   emptyState: document.querySelector('#emptyState'),
   summary: document.querySelector('#summary'),
@@ -137,6 +140,21 @@ async function loadWatchers() {
   const data = await api('/api/watchers');
   state.watchers = data.watchers;
   render();
+}
+
+async function loadReportBotStatus() {
+  const data = await api('/api/report-bot/status');
+  renderReportBotStatus(data.status);
+}
+
+function renderReportBotStatus(status) {
+  const parts = [
+    status.enabled ? 'running' : 'stopped',
+    status.commandsRegistered ? 'commands registered' : 'commands not registered'
+  ];
+  if (!status.configured) parts.push('missing env config');
+  if (status.lastError) parts.push(`last error: ${status.lastError}`);
+  els.reportBotSummary.textContent = parts.join(' - ');
 }
 
 function openForm(watcher = null) {
@@ -291,10 +309,30 @@ els.logoutBtn.addEventListener('click', async () => {
   window.location.href = '/login';
 });
 els.refreshBtn.addEventListener('click', loadWatchers);
+els.reportBotStartBtn.addEventListener('click', async () => {
+  try {
+    const data = await api('/api/report-bot/start', { method: 'POST' });
+    renderReportBotStatus(data.status);
+    showToast('Report bot started.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+els.reportBotStopBtn.addEventListener('click', async () => {
+  try {
+    const data = await api('/api/report-bot/stop', { method: 'POST' });
+    renderReportBotStatus(data.status);
+    showToast('Report bot stopped.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
 els.closeDialogBtn.addEventListener('click', () => els.dialog.close());
 els.cancelBtn.addEventListener('click', () => els.dialog.close());
 els.form.addEventListener('submit', saveForm);
 els.watchersBody.addEventListener('click', handleAction);
 
 loadWatchers().catch((error) => showToast(error.message));
+loadReportBotStatus().catch((error) => showToast(error.message));
 setInterval(() => loadWatchers().catch(() => {}), 5000);
+setInterval(() => loadReportBotStatus().catch(() => {}), 10000);

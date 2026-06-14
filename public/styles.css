@@ -114,6 +114,26 @@ main {
   color: var(--muted);
 }
 
+.featureBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.featureBar h2 {
+  margin-bottom: 4px;
+}
+
+.featureBar p {
+  color: var(--muted);
+}
+
 .tableWrap {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -338,7 +358,8 @@ label.check input {
 
 @media (max-width: 720px) {
   .topbar,
-  .toolbar {
+  .toolbar,
+  .featureBar {
     align-items: stretch;
     flex-direction: column;
   }

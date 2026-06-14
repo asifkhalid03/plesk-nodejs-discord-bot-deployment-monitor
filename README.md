@@ -13,6 +13,7 @@ A Node.js Discord bot with a small web UI for polling remote FTP/SFTP deployment
 - Encrypts stored passwords and private keys using AES-256-GCM.
 - Shows live watcher status in the web UI.
 - Includes test connection and test Discord message actions.
+- Optional Daily Reports Bot feature with web UI start/stop controls and slash commands for TXT/PDF reports.
 
 ## Discord Setup
 
@@ -24,6 +25,8 @@ A Node.js Discord bot with a small web UI for polling remote FTP/SFTP deployment
    - Scopes: `bot`
    - Bot permissions: `Send Messages`, `View Channels`, optionally `Read Message History`
 6. Copy a channel ID from Discord by enabling Developer Mode, right-clicking a channel, and choosing Copy Channel ID. Channel names can work when `DISCORD_GUILD_ID` or `GUILD_ID` is set and the bot can access the guild, but channel IDs are most reliable.
+
+For the Daily Reports Bot feature, also enable the Discord bot's `Message Content Intent` in the Developer Portal and invite the bot with `applications.commands`, `Read Message History`, `Send Messages`, and `Attach Files`.
 
 ## Environment Variables
 
@@ -49,6 +52,10 @@ Optional variables:
 - `PORT`: Web UI/API port. Defaults to `3000`.
 - `DATABASE_PATH`: SQLite file path. Defaults to `./data/app.db`.
 - `DISCORD_GUILD_ID`: Used to resolve channel names. Alias: `GUILD_ID`.
+- `DISCORD_CLIENT_ID`: Discord application/client ID. Alias: `CLIENT_ID`.
+- `DAILY_REPORTS_CHANNEL_ID`: Source channel where daily reports are posted.
+- `REPORTS_DOWNLOAD_CHANNEL_ID`: Channel where report slash commands are allowed.
+- `REPORT_BOT_AUTO_START`: Set to `true` to start report commands automatically on app boot.
 - `DEFAULT_POLL_INTERVAL_SECONDS`: Defaults to `5`.
 - `MAX_DISCORD_MESSAGE_LENGTH`: Defaults to `1900`.
 - `LARGE_LOG_ATTACHMENT_LINE_THRESHOLD`: Defaults to `60`. Larger poll bursts are sent as a file instead of many messages.
@@ -163,6 +170,20 @@ curl "https://your-domain.com/hooks/YOUR_TOKEN"
 ```
 
 Keep webhook URLs secret. If one leaks, click `Reset webhook` for that watcher.
+
+## Daily Reports Bot
+
+Use the top **Daily Reports Bot** controls in the web UI to start or stop the report feature.
+
+When started, it registers these slash commands in your guild:
+
+- `/today-report`
+- `/yesterday-report`
+- `/custom-report`
+- `/user-report`
+- `/report-help`
+
+Commands only work in `REPORTS_DOWNLOAD_CHANNEL_ID`. They read messages from `DAILY_REPORTS_CHANNEL_ID` and return TXT/PDF report files.
 
 ## Security Notes
 

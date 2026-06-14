@@ -6,6 +6,7 @@ const DiscordService = require('./discord');
 const WatcherManager = require('./watcherManager');
 const registerRoutes = require('./routes');
 const registerAuth = require('./auth');
+const ReportBotService = require('./reportBot');
 
 async function main() {
   await db.initDb();
@@ -20,8 +21,14 @@ async function main() {
   discordService.startInBackground();
 
   const watcherManager = new WatcherManager(discordService);
-  registerRoutes(app, watcherManager, discordService);
+  const reportBotService = new ReportBotService(discordService);
+  registerRoutes(app, watcherManager, discordService, reportBotService);
   await watcherManager.startEnabledWatchers();
+  if (config.reportBotAutoStart) {
+    reportBotService.start().catch((error) => {
+      console.error('Report bot auto-start failed:', error.message);
+    });
+  }
 
   const server = app.listen(config.port, () => {
     console.log(`Web UI listening on http://localhost:${config.port}`);

@@ -58,7 +58,7 @@ function validateWatcherPayload(body, { partial = false } = {}) {
   };
 }
 
-function registerRoutes(app, watcherManager, discordService) {
+function registerRoutes(app, watcherManager, discordService, reportBotService) {
   const router = express.Router();
 
   async function handleTriggerWebhook(req, res, next) {
@@ -204,6 +204,26 @@ function registerRoutes(app, watcherManager, discordService) {
 
   router.get('/status', (req, res) => {
     res.json({ statuses: watcherManager.getStatuses() });
+  });
+
+  router.get('/report-bot/status', (req, res) => {
+    res.json({ status: reportBotService.getStatus() });
+  });
+
+  router.post('/report-bot/start', async (req, res, next) => {
+    try {
+      res.json({ status: await reportBotService.start() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/report-bot/stop', async (req, res, next) => {
+    try {
+      res.json({ status: await reportBotService.stop() });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.use('/api', router);
