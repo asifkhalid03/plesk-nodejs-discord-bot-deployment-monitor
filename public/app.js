@@ -56,6 +56,11 @@ async function api(path, options = {}) {
     ...options
   });
 
+  if (response.status === 401) {
+    window.location.replace('/login');
+    throw new Error('Login required.');
+  }
+
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || `Request failed: ${response.status}`);
@@ -63,6 +68,26 @@ async function api(path, options = {}) {
 
   if (response.status === 204) return null;
   return response.json();
+}
+
+async function ensureAuthenticated() {
+  const response = await fetch('/api/auth/status', {
+    headers: { Accept: 'application/json' }
+  });
+
+  if (response.status === 401) {
+    window.location.replace('/login');
+    return false;
+  }
+
+  if (!response.ok) throw new Error(`Auth check failed: ${response.status}`);
+  const status = await response.json();
+  if (status.authConfigured && !status.authenticated) {
+    window.location.replace('/login');
+    return false;
+  }
+
+  return true;
 }
 
 function escapeHtml(value) {
@@ -430,9 +455,25 @@ els.logDialog.addEventListener('close', () => {
 els.form.addEventListener('submit', saveForm);
 els.watchersBody.addEventListener('click', handleAction);
 
-loadWatchers().catch((error) => showToast(error.message));
-loadDiscordStatus().catch((error) => showToast(error.message));
-loadReportBotStatus().catch((error) => showToast(error.message));
-setInterval(() => loadWatchers().catch(() => {}), 5000);
-setInterval(() => loadDiscordStatus().catch(() => {}), 10000);
-setInterval(() => loadReportBotStatus().catch(() => {}), 10000);
+async function init() {
+  const authenticated = await ensureAuthenticated();
+  if (!authenticated) return;
+  document.body.classList.remove('authPending');
+
+  loadWatchers().catch((error) => showToast(error.message));
+  loadDiscordStatus().catch((error) => showToast(error.message));
+  loadReportBotStatus().catch((error) => showToast(error.message));
+  setInterval(() => loadWatchers().catch(() => {}), 5000);
+  setInterval(() => loadDiscordStatus().catch(() => {}), 10000);
+  setInterval(() => loadReportBotStatus().catch(() => {}), 10000);
+}
+
+init().catch((error) => showToast(error.message));
+
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) {
+    ensureAuthenticated().catch(() => {
+      window.location.replace('/login');
+    });
+  }
+});

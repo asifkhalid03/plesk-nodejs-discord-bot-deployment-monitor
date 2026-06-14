@@ -15,7 +15,13 @@ async function main() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], limit: '1mb' }));
   registerAuth(app);
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(express.static(path.join(__dirname, '..', 'public'), {
+    etag: false,
+    maxAge: 0,
+    setHeaders(res) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  }));
 
   const discordService = new DiscordService();
   discordService.startInBackground();

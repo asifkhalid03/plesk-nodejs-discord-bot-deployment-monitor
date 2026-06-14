@@ -142,7 +142,15 @@ function registerAuth(app) {
 
   app.use((req, res, next) => {
     if (!isLoginConfigured()) return next();
-    if (req.path === '/login.html' || req.path === '/styles.css' || req.path.startsWith('/hooks/')) return next();
+    if (
+      req.path === '/login.html' ||
+      req.path === '/styles.css' ||
+      req.path === '/app.js' ||
+      req.path === '/favicon.ico' ||
+      req.path.startsWith('/hooks/')
+    ) {
+      return next();
+    }
     if (readSession(req)) return next();
     if (wantsJson(req)) return res.status(401).json({ error: 'Login required.' });
     return res.redirect('/login');
