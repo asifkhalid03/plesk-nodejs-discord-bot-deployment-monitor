@@ -71,6 +71,8 @@ Optional variables:
 
 ## Web UI Access Control
 
+On a fresh install, open the app and complete `/setup` first. The setup screen creates the admin login and writes required values to `.env`. `ENCRYPTION_KEY` and `UI_SESSION_SECRET` can be generated from the UI, or left blank on the setup form to auto-generate them when saving.
+
 The web UI and API require login only when both `UI_LOGIN_EMAIL` and `UI_LOGIN_PASSWORD` are set. If either value is empty, login is disabled and `/login` redirects to the app.
 
 To restrict access by IP too:

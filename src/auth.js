@@ -1,9 +1,11 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 
 const sessions = new Map();
 const cookieName = 'dlw_session';
+const envPath = path.join(__dirname, '..', '.env');
 
 function parseCookies(req) {
   return String(req.headers.cookie || '')
@@ -75,6 +77,48 @@ function isLoginConfigured() {
   return Boolean(config.uiLoginEmail && config.uiLoginPassword);
 }
 
+function isSetupComplete() {
+  return Boolean(config.encryptionKey && config.uiLoginEmail && config.uiLoginPassword && config.uiSessionSecret);
+}
+
+function formatEnvValue(value) {
+  const text = String(value || '');
+  if (!text || /[\s#"'\\]/.test(text)) {
+    return JSON.stringify(text);
+  }
+  return text;
+}
+
+function upsertEnvValues(values) {
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const lines = existing ? existing.split(/\r?\n/) : [];
+  const seen = new Set();
+  const nextLines = lines.map((line) => {
+    const match = line.match(/^([A-Z0-9_]+)=/);
+    if (!match || !Object.prototype.hasOwnProperty.call(values, match[1])) return line;
+    seen.add(match[1]);
+    return `${match[1]}=${formatEnvValue(values[match[1]])}`;
+  });
+
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key)) nextLines.push(`${key}=${formatEnvValue(value)}`);
+  }
+
+  fs.writeFileSync(envPath, nextLines.join('\n').replace(/\n*$/, '\n'));
+  Object.assign(process.env, values);
+  Object.assign(config, {
+    encryptionKey: values.ENCRYPTION_KEY || config.encryptionKey,
+    discordBotToken: values.DISCORD_BOT_TOKEN || config.discordBotToken,
+    discordClientId: values.DISCORD_CLIENT_ID || config.discordClientId,
+    discordGuildId: values.DISCORD_GUILD_ID || config.discordGuildId,
+    dailyReportsChannelId: values.DAILY_REPORTS_CHANNEL_ID || config.dailyReportsChannelId,
+    reportsDownloadChannelId: values.REPORTS_DOWNLOAD_CHANNEL_ID || config.reportsDownloadChannelId,
+    uiLoginEmail: values.UI_LOGIN_EMAIL || config.uiLoginEmail,
+    uiLoginPassword: values.UI_LOGIN_PASSWORD || config.uiLoginPassword,
+    uiSessionSecret: values.UI_SESSION_SECRET || config.uiSessionSecret
+  });
+}
+
 function registerAuth(app) {
   if (config.trustProxy) app.set('trust proxy', true);
 
@@ -87,12 +131,70 @@ function registerAuth(app) {
   });
 
   app.get('/login', (req, res) => {
+    if (!isSetupComplete()) return res.redirect('/setup');
     if (!isLoginConfigured()) return res.redirect('/');
     if (readSession(req)) return res.redirect('/');
     return res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
   });
 
+  app.get('/setup', (req, res) => {
+    if (isSetupComplete()) return res.redirect('/login');
+    return res.sendFile(path.join(__dirname, '..', 'public', 'setup.html'));
+  });
+
+  app.get('/api/setup/status', (req, res) => {
+    return res.json({
+      setupComplete: isSetupComplete(),
+      hasEncryptionKey: Boolean(config.encryptionKey),
+      hasUiLogin: isLoginConfigured(),
+      hasSessionSecret: Boolean(config.uiSessionSecret),
+      discordConfigured: Boolean(config.discordBotToken)
+    });
+  });
+
+  app.post('/api/setup', (req, res) => {
+    if (isSetupComplete()) return res.status(409).json({ error: 'Setup is already complete.' });
+
+    const email = String(req.body?.uiLoginEmail || '').trim();
+    const password = String(req.body?.uiLoginPassword || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+    const encryptionKey = String(req.body?.encryptionKey || '').trim();
+    const uiSessionSecret = String(req.body?.uiSessionSecret || '').trim();
+    const discordToken = String(req.body?.discordBotToken || '').trim();
+    const discordGuildId = String(req.body?.discordGuildId || '').trim();
+    const discordClientId = String(req.body?.discordClientId || '').trim();
+    const dailyReportsChannelId = String(req.body?.dailyReportsChannelId || '').trim();
+    const reportsDownloadChannelId = String(req.body?.reportsDownloadChannelId || '').trim();
+
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'A valid login email is required.' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    if (password !== confirmPassword) return res.status(400).json({ error: 'Passwords do not match.' });
+    if (encryptionKey && Buffer.byteLength(encryptionKey) < 32) {
+      return res.status(400).json({ error: 'Encryption key must be at least 32 bytes, or leave it blank to generate one.' });
+    }
+    if (uiSessionSecret && Buffer.byteLength(uiSessionSecret) < 32) {
+      return res.status(400).json({ error: 'Session secret must be at least 32 bytes, or leave it blank to generate one.' });
+    }
+
+    const values = {
+      ENCRYPTION_KEY: encryptionKey || config.encryptionKey || crypto.randomBytes(32).toString('base64'),
+      UI_LOGIN_EMAIL: email,
+      UI_LOGIN_PASSWORD: password,
+      UI_SESSION_SECRET: uiSessionSecret || config.uiSessionSecret || crypto.randomBytes(32).toString('base64')
+    };
+
+    if (discordToken) values.DISCORD_BOT_TOKEN = discordToken;
+    if (discordGuildId) values.DISCORD_GUILD_ID = discordGuildId;
+    if (discordClientId) values.DISCORD_CLIENT_ID = discordClientId;
+    if (dailyReportsChannelId) values.DAILY_REPORTS_CHANNEL_ID = dailyReportsChannelId;
+    if (reportsDownloadChannelId) values.REPORTS_DOWNLOAD_CHANNEL_ID = reportsDownloadChannelId;
+
+    upsertEnvValues(values);
+    return res.json({ ok: true });
+  });
+
   app.post('/api/auth/login', (req, res) => {
+    if (!isSetupComplete()) return res.status(428).json({ error: 'First-time setup is required.' });
     if (!isLoginConfigured()) {
       return res.json({ ok: true, authenticated: false });
     }
@@ -122,12 +224,16 @@ function registerAuth(app) {
   });
 
   app.get('/api/auth/status', (req, res) => {
+    if (!isSetupComplete()) {
+      return res.json({ setupComplete: false, authConfigured: false, authenticated: false, email: null });
+    }
+
     if (!isLoginConfigured()) {
-      return res.json({ authConfigured: false, authenticated: false, email: null });
+      return res.json({ setupComplete: true, authConfigured: false, authenticated: false, email: null });
     }
 
     const session = readSession(req);
-    return res.json({ authConfigured: true, authenticated: Boolean(session), email: session?.email || null });
+    return res.json({ setupComplete: true, authConfigured: true, authenticated: Boolean(session), email: session?.email || null });
   });
 
   app.get('/api/auth/debug', (req, res) => {
@@ -141,9 +247,23 @@ function registerAuth(app) {
   });
 
   app.use((req, res, next) => {
+    if (!isSetupComplete()) {
+      if (
+        req.path === '/setup.html' ||
+        req.path === '/styles.css' ||
+        req.path === '/favicon.ico' ||
+        req.path.startsWith('/api/setup')
+      ) {
+        return next();
+      }
+      if (wantsJson(req)) return res.status(428).json({ error: 'First-time setup is required.' });
+      return res.redirect('/setup');
+    }
+
     if (!isLoginConfigured()) return next();
     if (
       req.path === '/login.html' ||
+      req.path === '/setup.html' ||
       req.path === '/styles.css' ||
       req.path === '/app.js' ||
       req.path === '/favicon.ico' ||

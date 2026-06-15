@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Setup - Deployment Log Watcher</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="loginPage">
+    <main class="setupShell">
+      <form id="setupForm" class="loginPanel setupPanel">
+        <h1>First-Time Setup</h1>
+        <p>Create the admin login. Encryption and session secrets are generated automatically.</p>
+
+        <div class="grid">
+          <label>
+            Admin email
+            <input id="uiLoginEmail" type="email" autocomplete="username" required />
+          </label>
+
+          <label>
+            Admin password
+            <input id="uiLoginPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+
+          <label>
+            Confirm password
+            <input id="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+
+          <label>
+            Encryption key
+            <span class="inputAction">
+              <input id="encryptionKey" autocomplete="off" placeholder="Auto-generated if blank" />
+              <button type="button" data-generate="encryptionKey">Generate</button>
+            </span>
+          </label>
+
+          <label>
+            Session secret
+            <span class="inputAction">
+              <input id="uiSessionSecret" autocomplete="off" placeholder="Auto-generated if blank" />
+              <button type="button" data-generate="uiSessionSecret">Generate</button>
+            </span>
+          </label>
+
+          <label>
+            Generate password
+            <button type="button" id="generatePasswordBtn">Generate admin password</button>
+          </label>
+
+          <label>
+            Discord bot token
+            <input id="discordBotToken" type="password" autocomplete="off" placeholder="Optional" />
+          </label>
+
+          <label>
+            Discord guild ID
+            <input id="discordGuildId" placeholder="Optional" />
+          </label>
+
+          <label>
+            Discord client ID
+            <input id="discordClientId" placeholder="Optional" />
+          </label>
+
+          <label>
+            Daily reports channel ID
+            <input id="dailyReportsChannelId" placeholder="Optional" />
+          </label>
+
+          <label>
+            Reports download channel ID
+            <input id="reportsDownloadChannelId" placeholder="Optional" />
+          </label>
+        </div>
+
+        <div id="setupError" class="error hidden"></div>
+        <button type="submit" class="primary">Save setup</button>
+      </form>
+    </main>
+
+    <script>
+      const form = document.querySelector('#setupForm');
+      const errorBox = document.querySelector('#setupError');
+
+      function randomBase64(bytes = 32) {
+        const data = new Uint8Array(bytes);
+        crypto.getRandomValues(data);
+        let binary = '';
+        data.forEach((byte) => {
+          binary += String.fromCharCode(byte);
+        });
+        return btoa(binary);
+      }
+
+      function randomPassword() {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_=+';
+        const data = new Uint8Array(18);
+        crypto.getRandomValues(data);
+        return Array.from(data, (byte) => chars[byte % chars.length]).join('');
+      }
+
+      async function checkSetupStatus() {
+        const response = await fetch('/api/setup/status');
+        if (!response.ok) return;
+        const status = await response.json();
+        if (status.setupComplete) window.location.replace('/login');
+      }
+
+      document.querySelectorAll('[data-generate]').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelector(`#${button.dataset.generate}`).value = randomBase64();
+        });
+      });
+
+      document.querySelector('#generatePasswordBtn').addEventListener('click', () => {
+        const password = randomPassword();
+        document.querySelector('#uiLoginPassword').value = password;
+        document.querySelector('#confirmPassword').value = password;
+      });
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        errorBox.classList.add('hidden');
+
+        const response = await fetch('/api/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uiLoginEmail: document.querySelector('#uiLoginEmail').value,
+            uiLoginPassword: document.querySelector('#uiLoginPassword').value,
+            confirmPassword: document.querySelector('#confirmPassword').value,
+            encryptionKey: document.querySelector('#encryptionKey').value,
+            uiSessionSecret: document.querySelector('#uiSessionSecret').value,
+            discordBotToken: document.querySelector('#discordBotToken').value,
+            discordGuildId: document.querySelector('#discordGuildId').value,
+            discordClientId: document.querySelector('#discordClientId').value,
+            dailyReportsChannelId: document.querySelector('#dailyReportsChannelId').value,
+            reportsDownloadChannelId: document.querySelector('#reportsDownloadChannelId').value
+          })
+        });
+
+        if (response.ok) {
+          window.location.replace('/login');
+          return;
+        }
+
+        const body = await response.json().catch(() => ({}));
+        errorBox.textContent = body.error || 'Setup failed.';
+        errorBox.classList.remove('hidden');
+      });
+
+      checkSetupStatus().catch(() => {});
+    </script>
+  </body>
+</html>

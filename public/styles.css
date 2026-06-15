@@ -411,6 +411,28 @@ label.check input {
   color: var(--muted);
 }
 
+.setupShell {
+  width: min(760px, calc(100vw - 32px));
+  padding: 0;
+}
+
+.setupPanel {
+  width: 100%;
+}
+
+.inputAction {
+  display: flex;
+  gap: 8px;
+}
+
+.inputAction input {
+  min-width: 0;
+}
+
+.inputAction button {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 720px) {
   .topbar,
   .toolbar,
@@ -429,5 +451,9 @@ label.check input {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .inputAction {
+    flex-direction: column;
   }
 }
