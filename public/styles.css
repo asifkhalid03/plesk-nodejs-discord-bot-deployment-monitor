@@ -31,6 +31,10 @@ body.authPending .toast {
   visibility: hidden;
 }
 
+body.setupPending .setupShell {
+  visibility: hidden;
+}
+
 button,
 input,
 select,

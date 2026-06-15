@@ -71,7 +71,7 @@ Optional variables:
 
 ## Web UI Access Control
 
-On a fresh install, open the app and complete `/setup` first. The setup screen creates the admin login and writes required values to `.env`. `ENCRYPTION_KEY` and `UI_SESSION_SECRET` can be generated from the UI, or left blank on the setup form to auto-generate them when saving.
+On a fresh install, open the app locally and complete `/setup` first. The setup screen creates the admin login and writes required values to `.env`. `ENCRYPTION_KEY` and `UI_SESSION_SECRET` can be generated from the UI, or left blank on the setup form to auto-generate them when saving. First-time setup is localhost-only by default; set `ALLOW_REMOTE_SETUP=true` only temporarily if you must complete setup through a remote browser.
 
 The web UI and API require login only when both `UI_LOGIN_EMAIL` and `UI_LOGIN_PASSWORD` are set. If either value is empty, login is disabled and `/login` redirects to the app.
 
@@ -197,6 +197,7 @@ Commands only work in `REPORTS_DOWNLOAD_CHANNEL_ID`. They read messages from `DA
 - If you lose or change `ENCRYPTION_KEY`, existing stored secrets cannot be decrypted.
 - Prefer SFTP over FTP. FTP credentials are sent insecurely unless your server supports FTPS, which this simple implementation does not configure.
 - If the app is exposed publicly, set `UI_LOGIN_EMAIL`, `UI_LOGIN_PASSWORD`, and `UI_SESSION_SECRET`, or put it behind a trusted network, VPN, reverse proxy auth, or firewall.
+- Keep `ALLOW_REMOTE_SETUP=false` after first-time setup. If you temporarily enable it, disable it immediately after saving setup.
 
 ## Project Structure
 

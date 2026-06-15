@@ -6,7 +6,7 @@
     <title>Setup - Deployment Log Watcher</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="loginPage">
+  <body class="loginPage setupPending">
     <main class="setupShell">
       <form id="setupForm" class="loginPanel setupPanel">
         <h1>First-Time Setup</h1>
@@ -106,6 +106,7 @@
         if (!response.ok) return;
         const status = await response.json();
         if (status.setupComplete) window.location.replace('/login');
+        else document.body.classList.remove('setupPending');
       }
 
       document.querySelectorAll('[data-generate]').forEach((button) => {

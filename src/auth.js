@@ -27,7 +27,9 @@ function normalizeIp(ip) {
 }
 
 function getClientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const forwarded = config.trustProxy
+    ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    : '';
   return normalizeIp(forwarded || req.ip || req.socket.remoteAddress);
 }
 
@@ -42,6 +44,23 @@ function safeEqual(left, right) {
   return crypto.timingSafeEqual(a, b);
 }
 
+function hashPassword(password, salt = crypto.randomBytes(16).toString('base64url')) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('base64url');
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const value = String(stored || '');
+  if (!value.startsWith('scrypt:')) {
+    return safeEqual(password, value);
+  }
+
+  const [, salt, expected] = value.split(':');
+  if (!salt || !expected) return false;
+  const actual = hashPassword(password, salt).split(':')[2];
+  return safeEqual(actual, expected);
+}
+
 function sign(value) {
   const secret = config.uiSessionSecret || 'local-dev-session-secret';
   return crypto.createHmac('sha256', secret).update(value).digest('base64url');
@@ -49,11 +68,13 @@ function sign(value) {
 
 function createCookie(sessionId) {
   const value = `${sessionId}.${sign(sessionId)}`;
-  return `${cookieName}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
+  const secure = config.trustProxy ? '; Secure' : '';
+  return `${cookieName}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${secure}`;
 }
 
 function clearCookie() {
-  return `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  const secure = config.trustProxy ? '; Secure' : '';
+  return `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
 }
 
 function readSession(req) {
@@ -75,6 +96,10 @@ function wantsJson(req) {
 
 function isLoginConfigured() {
   return Boolean(config.uiLoginEmail && config.uiLoginPassword);
+}
+
+function isSetupAllowed(req) {
+  return config.allowRemoteSetup || isLocalRequest(req);
 }
 
 function isSetupComplete() {
@@ -139,10 +164,21 @@ function registerAuth(app) {
 
   app.get('/setup', (req, res) => {
     if (isSetupComplete()) return res.redirect('/login');
+    if (!isSetupAllowed(req)) return res.status(403).send('First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.');
+    return res.sendFile(path.join(__dirname, '..', 'public', 'setup.html'));
+  });
+
+  app.get('/setup.html', (req, res) => {
+    if (isSetupComplete()) return res.redirect('/login');
+    if (!isSetupAllowed(req)) return res.status(403).send('First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.');
     return res.sendFile(path.join(__dirname, '..', 'public', 'setup.html'));
   });
 
   app.get('/api/setup/status', (req, res) => {
+    if (!isSetupComplete() && !isSetupAllowed(req)) {
+      return res.status(403).json({ error: 'First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.' });
+    }
+
     return res.json({
       setupComplete: isSetupComplete(),
       hasEncryptionKey: Boolean(config.encryptionKey),
@@ -154,6 +190,9 @@ function registerAuth(app) {
 
   app.post('/api/setup', (req, res) => {
     if (isSetupComplete()) return res.status(409).json({ error: 'Setup is already complete.' });
+    if (!isSetupAllowed(req)) {
+      return res.status(403).json({ error: 'First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.' });
+    }
 
     const email = String(req.body?.uiLoginEmail || '').trim();
     const password = String(req.body?.uiLoginPassword || '');
@@ -179,7 +218,7 @@ function registerAuth(app) {
     const values = {
       ENCRYPTION_KEY: encryptionKey || config.encryptionKey || crypto.randomBytes(32).toString('base64'),
       UI_LOGIN_EMAIL: email,
-      UI_LOGIN_PASSWORD: password,
+      UI_LOGIN_PASSWORD: hashPassword(password),
       UI_SESSION_SECRET: uiSessionSecret || config.uiSessionSecret || crypto.randomBytes(32).toString('base64')
     };
 
@@ -201,8 +240,12 @@ function registerAuth(app) {
 
     const email = String(req.body?.email || '');
     const password = String(req.body?.password || '');
-    if (!safeEqual(email, config.uiLoginEmail) || !safeEqual(password, config.uiLoginPassword)) {
+    if (!safeEqual(email, config.uiLoginEmail) || !verifyPassword(password, config.uiLoginPassword)) {
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    if (!String(config.uiLoginPassword).startsWith('scrypt:')) {
+      upsertEnvValues({ UI_LOGIN_PASSWORD: hashPassword(password) });
     }
 
     const sessionId = crypto.randomBytes(32).toString('base64url');
@@ -254,6 +297,12 @@ function registerAuth(app) {
         req.path === '/favicon.ico' ||
         req.path.startsWith('/api/setup')
       ) {
+        if (req.path === '/setup.html' || req.path.startsWith('/api/setup')) {
+          if (!isSetupAllowed(req)) {
+            if (wantsJson(req)) return res.status(403).json({ error: 'First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.' });
+            return res.status(403).send('First-time setup is only allowed from localhost unless ALLOW_REMOTE_SETUP=true.');
+          }
+        }
         return next();
       }
       if (wantsJson(req)) return res.status(428).json({ error: 'First-time setup is required.' });
@@ -263,7 +312,6 @@ function registerAuth(app) {
     if (!isLoginConfigured()) return next();
     if (
       req.path === '/login.html' ||
-      req.path === '/setup.html' ||
       req.path === '/styles.css' ||
       req.path === '/app.js' ||
       req.path === '/favicon.ico' ||

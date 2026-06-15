@@ -56,6 +56,7 @@ module.exports = {
   trustProxy: booleanEnv('TRUST_PROXY', false),
   ipRestrict: booleanEnv('IP_RESTRICT', false),
   ipAllowlist: listEnv('IP_ALLOWLIST'),
+  allowRemoteSetup: booleanEnv('ALLOW_REMOTE_SETUP', false),
   uiLoginEmail: stringEnv('UI_LOGIN_EMAIL', { preferFile: true }),
   uiLoginPassword: stringEnv('UI_LOGIN_PASSWORD', { preferFile: true }),
   uiSessionSecret:
