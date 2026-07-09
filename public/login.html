@@ -3,27 +3,44 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Sign in to manage your deployment log watchers and Discord integrations." />
+    <meta name="theme-color" content="#0b0f19" />
     <title>Login - Deployment Log Watcher</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body class="loginPage">
     <main class="loginShell">
       <form id="loginForm" class="loginPanel">
+        <div class="login-logo">
+          <div class="topbar-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/>
+              <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
+              <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/>
+              <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>
+            </svg>
+          </div>
+        </div>
         <h1>Deployment Log Watcher</h1>
         <p>Sign in to manage remote log watchers.</p>
 
         <label>
           Email
-          <input id="email" type="email" autocomplete="username" required />
+          <input id="email" type="email" autocomplete="username" required placeholder="you@example.com" />
         </label>
 
         <label>
           Password
-          <input id="password" type="password" autocomplete="current-password" required />
+          <input id="password" type="password" autocomplete="current-password" required placeholder="Enter your password" />
         </label>
 
         <div id="loginError" class="error hidden"></div>
-        <button type="submit" class="primary">Login</button>
+        <button type="submit" class="primary" style="min-height:42px;font-size:15px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;vertical-align:-3px"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Sign in
+        </button>
       </form>
     </main>
 

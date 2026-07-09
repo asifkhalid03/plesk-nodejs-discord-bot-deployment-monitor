@@ -28,7 +28,11 @@ const els = {
   closeLogDialogBtn: document.querySelector('#closeLogDialogBtn'),
   liveLogBlock: document.querySelector('#liveLogBlock'),
   formError: document.querySelector('#formError'),
-  toast: document.querySelector('#toast')
+  toast: document.querySelector('#toast'),
+  statTotal: document.querySelector('#statTotal'),
+  statActive: document.querySelector('#statActive'),
+  statErrors: document.querySelector('#statErrors'),
+  statStopped: document.querySelector('#statStopped')
 };
 
 const fields = {
@@ -49,6 +53,24 @@ const fields = {
   autoClearLimit: document.querySelector('#autoClearLimit'),
   enabled: document.querySelector('#enabled')
 };
+
+/* ---- SVG icon helpers for action buttons ---- */
+const icons = {
+  play: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  stop: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  eye: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  edit: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+  connection: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  discord: '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.79 19.79 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.618-1.25.077.077 0 00-.079-.037A19.74 19.74 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.11 13.11 0 01-1.872-.892.077.077 0 01-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 01.078-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.009c.12.099.246.198.373.292a.077.077 0 01-.006.127 12.3 12.3 0 01-1.873.892.076.076 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.84 19.84 0 006.002-3.03.077.077 0 00.031-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.028z"/></svg>',
+  copy: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  refresh: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+  trash: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  clear: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>'
+};
+
+function icon(name) {
+  return `<span style="display:inline-flex;align-items:center;margin-right:4px;vertical-align:-1px">${icons[name] || ''}</span>`;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -124,12 +146,30 @@ function webhookUrl(watcher) {
   return watcher.webhookToken ? `${location.origin}/hooks/${watcher.webhookToken}` : '';
 }
 
+function renderStats() {
+  const watchers = state.watchers;
+  const total = watchers.length;
+  const active = watchers.filter((w) => {
+    const s = (w.status?.state || '').toLowerCase();
+    return s === 'polling' || s === 'connected' || s === 'starting' || s === 'reconnecting';
+  }).length;
+  const errors = watchers.filter((w) => (w.status?.state || '').toLowerCase() === 'error').length;
+  const stopped = total - active - errors;
+
+  if (els.statTotal) els.statTotal.textContent = total;
+  if (els.statActive) els.statActive.textContent = active;
+  if (els.statErrors) els.statErrors.textContent = errors;
+  if (els.statStopped) els.statStopped.textContent = Math.max(0, stopped);
+}
+
 function render() {
   els.watchersBody.innerHTML = '';
   els.emptyState.classList.toggle('hidden', state.watchers.length > 0);
 
   const running = state.watchers.filter((watcher) => watcher.status?.state !== 'stopped' && watcher.enabled).length;
   els.summary.textContent = `${state.watchers.length} watcher${state.watchers.length === 1 ? '' : 's'} · ${running} enabled`;
+
+  renderStats();
 
   for (const watcher of state.watchers) {
     const status = watcher.status || {};
@@ -159,16 +199,16 @@ function render() {
       </td>
       <td>
         <div class="actions">
-          <button data-action="start" data-id="${watcher.id}">Start</button>
-          <button data-action="stop" data-id="${watcher.id}">Stop</button>
-          <button data-action="view-log" data-id="${watcher.id}">View log</button>
-          <button data-action="edit" data-id="${watcher.id}">Edit</button>
-          <button data-action="test-connection" data-id="${watcher.id}">Test FTP/SFTP</button>
-          <button data-action="test-discord" data-id="${watcher.id}" ${watcher.discordEnabled ? '' : 'disabled'}>Test Discord</button>
-          <button data-action="copy-webhook" data-id="${watcher.id}">Copy trigger</button>
-          <button data-action="reset-webhook" data-id="${watcher.id}">Reset webhook</button>
-          <button class="danger" data-action="clear-channel" data-id="${watcher.id}" ${watcher.discordEnabled ? '' : 'disabled'}>Clear channel</button>
-          <button class="danger" data-action="delete" data-id="${watcher.id}">Delete</button>
+          <button data-action="start" data-id="${watcher.id}">${icon('play')}Start</button>
+          <button data-action="stop" data-id="${watcher.id}">${icon('stop')}Stop</button>
+          <button data-action="view-log" data-id="${watcher.id}">${icon('eye')}View log</button>
+          <button data-action="edit" data-id="${watcher.id}">${icon('edit')}Edit</button>
+          <button data-action="test-connection" data-id="${watcher.id}">${icon('connection')}Test FTP/SFTP</button>
+          <button data-action="test-discord" data-id="${watcher.id}" ${watcher.discordEnabled ? '' : 'disabled'}>${icon('discord')}Test Discord</button>
+          <button data-action="copy-webhook" data-id="${watcher.id}">${icon('copy')}Copy trigger</button>
+          <button data-action="reset-webhook" data-id="${watcher.id}">${icon('refresh')}Reset webhook</button>
+          <button class="danger" data-action="clear-channel" data-id="${watcher.id}" ${watcher.discordEnabled ? '' : 'disabled'}>${icon('clear')}Clear channel</button>
+          <button class="danger" data-action="delete" data-id="${watcher.id}">${icon('trash')}Delete</button>
         </div>
       </td>
     `;
@@ -189,7 +229,7 @@ async function loadDiscordStatus() {
 }
 
 function renderDiscordStatus(status) {
-  els.discordBadge.classList.remove('ok', 'warn');
+  els.discordBadge.classList.remove('ok', 'warn', 'error');
 
   if (status.ready) {
     els.discordBadge.textContent = 'Connected';
@@ -221,7 +261,7 @@ function renderReportBotStatus(status) {
   ];
   if (!status.configured) parts.push('missing env config');
   if (status.lastError) parts.push(`last error: ${status.lastError}`);
-  els.reportBotSummary.textContent = parts.join(' - ');
+  els.reportBotSummary.textContent = parts.join(' · ');
 }
 
 function openForm(watcher = null) {
@@ -284,7 +324,7 @@ async function loadLiveLog() {
   els.liveLogBlock.textContent = formatLogLines(data.lines || []);
   const count = data.lines?.length || 0;
   const stateName = data.status?.state || watcher?.status?.state || 'stopped';
-  els.logDialogSummary.textContent = `${count} captured line${count === 1 ? '' : 's'} - ${stateName}${data.truncated ? ` - showing latest ${data.maxLines}` : ''}`;
+  els.logDialogSummary.textContent = `${count} captured line${count === 1 ? '' : 's'} · ${stateName}${data.truncated ? ` · showing latest ${data.maxLines}` : ''}`;
 
   if (wasAtBottom) {
     els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
