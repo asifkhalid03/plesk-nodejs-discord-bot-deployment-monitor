@@ -79,8 +79,14 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     throw new Error('deployWebhookRetryCount must be between 0 and 10.');
   }
 
+  const groupId = body.groupId === undefined || body.groupId === '' ? undefined : Number(body.groupId);
+  if (groupId !== undefined && (!Number.isInteger(groupId) || groupId <= 0)) {
+    throw new Error('groupId must be a valid watcher group.');
+  }
+
   return {
     name: String(body.name || '').trim(),
+    groupId,
     protocol,
     host: String(body.host || '').trim(),
     port,
@@ -205,8 +211,46 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     try {
       const watchers = await db.listWatchers();
       res.json({
+        groups: await db.listWatcherGroups(),
         watchers: await Promise.all(watchers.map((watcher) => decorateWatcher(watcher)))
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/groups', async (req, res, next) => {
+    try {
+      res.json({ groups: await db.listWatcherGroups() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/groups', async (req, res, next) => {
+    try {
+      const group = await db.createWatcherGroup(req.body || {});
+      res.status(201).json({ group });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/groups/:id', async (req, res, next) => {
+    try {
+      const group = await db.updateWatcherGroup(req.params.id, req.body || {});
+      if (!group) return res.status(404).json({ error: 'Group not found.' });
+      res.json({ group });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/groups/:id', async (req, res, next) => {
+    try {
+      const deleted = await db.deleteWatcherGroup(req.params.id);
+      if (!deleted) return res.status(404).json({ error: 'Group not found.' });
+      res.status(204).end();
     } catch (error) {
       next(error);
     }
@@ -302,6 +346,10 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     try {
       const watcher = await db.getWatcher(req.params.id);
       if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      if (req.query.remote === '1') {
+        res.json(await watcherManager.getRemoteLogTail(req.params.id, { maxBytes: req.query.maxBytes }));
+        return;
+      }
       res.json(watcherManager.getLogs(req.params.id));
     } catch (error) {
       next(error);

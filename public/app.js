@@ -1,8 +1,10 @@
 const state = {
   watchers: [],
+  groups: [],
   pendingJobs: [],
   discordStatus: null,
   activeLogWatcherId: null,
+  activeLogRemoteLoaded: false,
   logPollTimer: null
 };
 
@@ -18,6 +20,10 @@ const els = {
   pendingWebhooksSummary: document.querySelector('#pendingWebhooksSummary'),
   pendingWebhooksEmpty: document.querySelector('#pendingWebhooksEmpty'),
   pendingWebhooksList: document.querySelector('#pendingWebhooksList'),
+  groupsSummary: document.querySelector('#groupsSummary'),
+  groupNameInput: document.querySelector('#groupNameInput'),
+  addGroupBtn: document.querySelector('#addGroupBtn'),
+  groupsList: document.querySelector('#groupsList'),
   watchersBody: document.querySelector('#watchersBody'),
   emptyState: document.querySelector('#emptyState'),
   summary: document.querySelector('#summary'),
@@ -30,6 +36,7 @@ const els = {
   logDialogTitle: document.querySelector('#logDialogTitle'),
   logDialogSummary: document.querySelector('#logDialogSummary'),
   closeLogDialogBtn: document.querySelector('#closeLogDialogBtn'),
+  loadRemoteLogBtn: document.querySelector('#loadRemoteLogBtn'),
   liveLogBlock: document.querySelector('#liveLogBlock'),
   commandDialog: document.querySelector('#commandDialog'),
   commandDialogTitle: document.querySelector('#commandDialogTitle'),
@@ -50,6 +57,7 @@ const els = {
 const fields = {
   id: document.querySelector('#watcherId'),
   name: document.querySelector('#name'),
+  groupId: document.querySelector('#groupId'),
   protocol: document.querySelector('#protocol'),
   host: document.querySelector('#host'),
   port: document.querySelector('#port'),
@@ -212,7 +220,7 @@ function renderPendingWebhooks() {
             <strong>#${escapeHtml(job.id)} ${escapeHtml(job.watcherName || `Watcher ${job.watcherId}`)}</strong>
           </div>
           <div class="subtle">${escapeHtml(branch)}${sha ? ` - ${escapeHtml(sha)}` : ''} - ${escapeHtml(message)}</div>
-          <div class="subtle">${escapeHtml(job.watcherHost || '')}${job.watcherRemotePath ? ` - ${escapeHtml(job.watcherRemotePath)}` : ''}</div>
+          <div class="subtle">${escapeHtml(job.groupName || 'Default')} - ${escapeHtml(job.watcherHost || '')}${job.watcherRemotePath ? ` - ${escapeHtml(job.watcherRemotePath)}` : ''}</div>
         </div>
         <div class="pendingMeta">
           <div>${escapeHtml(formatDate(startedOrQueued))}</div>
@@ -225,6 +233,42 @@ function renderPendingWebhooks() {
       </div>
     `;
     els.pendingWebhooksList.appendChild(item);
+  }
+}
+
+function renderGroups() {
+  const groups = state.groups || [];
+  els.groupsSummary.textContent = `${groups.length} group${groups.length === 1 ? '' : 's'} - each group has its own queue`;
+  els.groupsList.innerHTML = '';
+
+  for (const group of groups) {
+    const item = document.createElement('div');
+    item.className = 'groupItem';
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(group.name)}</strong>
+        <span class="subtle">${group.isDefault ? 'Default - ' : ''}${escapeHtml(group.watcherCount || 0)} watcher${group.watcherCount === 1 ? '' : 's'}</span>
+      </div>
+      <div class="pendingActions">
+        <button data-group-action="rename" data-id="${group.id}" ${group.isDefault ? 'disabled' : ''}>Rename</button>
+        <button class="danger" data-group-action="delete" data-id="${group.id}" ${group.isDefault ? 'disabled' : ''}>Delete</button>
+      </div>
+    `;
+    els.groupsList.appendChild(item);
+  }
+}
+
+function renderGroupOptions(selectedGroupId) {
+  fields.groupId.innerHTML = '';
+  for (const group of state.groups || []) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.isDefault ? `${group.name} (default)` : group.name;
+    fields.groupId.appendChild(option);
+  }
+  if (selectedGroupId) fields.groupId.value = String(selectedGroupId);
+  if (!fields.groupId.value && fields.groupId.options.length > 0) {
+    fields.groupId.value = fields.groupId.options[0].value;
   }
 }
 
@@ -253,6 +297,7 @@ function render() {
 
   renderStats();
   renderPendingWebhooks();
+  renderGroups();
 
   for (const watcher of state.watchers) {
     const status = watcher.status || {};
@@ -260,6 +305,7 @@ function render() {
     tr.innerHTML = `
       <td class="nameCell">
         <strong>${escapeHtml(watcher.name)}</strong>
+        <span class="subtle">Group: ${escapeHtml(watcher.groupName || 'Default')}</span>
         <span class="subtle">${escapeHtml(watcher.protocol.toUpperCase())} · every ${escapeHtml(watcher.pollIntervalSeconds)}s</span>
       </td>
       <td>
@@ -305,7 +351,14 @@ function render() {
 async function loadWatchers() {
   const data = await api('/api/watchers');
   state.watchers = data.watchers;
+  state.groups = data.groups || state.groups;
   render();
+}
+
+async function loadGroups() {
+  const data = await api('/api/groups');
+  state.groups = data.groups || [];
+  renderGroups();
 }
 
 async function loadPendingWebhooks() {
@@ -361,6 +414,7 @@ function openForm(watcher = null) {
   els.formError.classList.add('hidden');
   fields.id.value = watcher?.id || '';
   fields.name.value = watcher?.name || '';
+  renderGroupOptions(watcher?.groupId);
   fields.protocol.value = watcher?.protocol || 'sftp';
   fields.host.value = watcher?.host || '';
   fields.port.value = watcher?.port || 22;
@@ -386,6 +440,7 @@ function openForm(watcher = null) {
 function formPayload() {
   const payload = {
     name: fields.name.value.trim(),
+    groupId: Number(fields.groupId.value),
     protocol: fields.protocol.value,
     host: fields.host.value.trim(),
     port: Number(fields.port.value),
@@ -467,13 +522,41 @@ async function loadLiveLog() {
   const wasAtBottom =
     els.liveLogBlock.scrollTop + els.liveLogBlock.clientHeight >= els.liveLogBlock.scrollHeight - 24;
 
-  els.liveLogBlock.textContent = formatLogLines(data.lines || []);
   const count = data.lines?.length || 0;
+  if (count === 0 && state.activeLogRemoteLoaded) return 0;
+
+  els.liveLogBlock.textContent = formatLogLines(data.lines || []);
   const stateName = data.status?.state || watcher?.status?.state || 'stopped';
   els.logDialogSummary.textContent = `${count} captured line${count === 1 ? '' : 's'} - ${stateName}${data.truncated ? ` - showing latest ${data.maxLines}` : ''}`;
 
   if (wasAtBottom) {
     els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
+  }
+
+  return count;
+}
+
+async function loadRemoteLogTail() {
+  if (!state.activeLogWatcherId) return 0;
+  state.activeLogRemoteLoaded = true;
+  els.logDialogSummary.textContent = 'Loading remote log file...';
+
+  try {
+    const data = await api(`/api/watchers/${state.activeLogWatcherId}/logs?remote=1`);
+    els.liveLogBlock.textContent = formatLogLines(data.lines || []);
+    const count = data.lines?.length || 0;
+    const stateName = data.status?.state || 'stopped';
+    const remoteText = data.remote
+      ? ` - ${data.remote.resolvedPath} - ${data.remote.size} bytes`
+      : '';
+    els.logDialogSummary.textContent = `${count} remote line${count === 1 ? '' : 's'} - ${stateName}${remoteText}${data.truncated ? ' - tail view' : ''}`;
+    els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
+    return count;
+  } catch (error) {
+    if (error.message === 'Login required.') throw error;
+    els.liveLogBlock.textContent = `Unable to read remote log: ${error.message}`;
+    els.logDialogSummary.textContent = 'Remote log read failed';
+    return 0;
   }
 }
 
@@ -481,6 +564,7 @@ function closeLiveLog() {
   clearInterval(state.logPollTimer);
   state.logPollTimer = null;
   state.activeLogWatcherId = null;
+  state.activeLogRemoteLoaded = false;
   els.logDialog.close();
 }
 
@@ -491,7 +575,11 @@ async function openLiveLog(watcher) {
   els.liveLogBlock.textContent = 'Loading...';
   els.logDialog.showModal();
   clearInterval(state.logPollTimer);
-  await loadLiveLog();
+  state.activeLogRemoteLoaded = false;
+  const capturedCount = await loadLiveLog();
+  if (!capturedCount && !state.activeLogRemoteLoaded) {
+    await loadRemoteLogTail();
+  }
   els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
   state.logPollTimer = setInterval(() => {
     loadLiveLog().catch((error) => showToast(error.message));
@@ -517,6 +605,54 @@ async function saveForm(event) {
   } catch (error) {
     els.formError.textContent = error.message;
     els.formError.classList.remove('hidden');
+  }
+}
+
+async function addGroup() {
+  const name = els.groupNameInput.value.trim();
+  if (!name) {
+    showToast('Group name is required.');
+    return;
+  }
+  await api('/api/groups', {
+    method: 'POST',
+    body: JSON.stringify({ name })
+  });
+  els.groupNameInput.value = '';
+  showToast('Group added.');
+  await loadWatchers();
+}
+
+async function handleGroupAction(event) {
+  const button = event.target.closest('button[data-group-action]');
+  if (!button) return;
+  const groupId = button.dataset.id;
+  const group = state.groups.find((item) => String(item.id) === String(groupId));
+  if (!group) return;
+
+  try {
+    button.disabled = true;
+    if (button.dataset.groupAction === 'rename') {
+      const name = prompt('Rename group', group.name);
+      if (!name || !name.trim()) return;
+      await api(`/api/groups/${groupId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: name.trim() })
+      });
+      showToast('Group renamed.');
+    }
+
+    if (button.dataset.groupAction === 'delete') {
+      if (!confirm(`Delete group "${group.name}"? Its watchers will move to Default.`)) return;
+      await api(`/api/groups/${groupId}`, { method: 'DELETE' });
+      showToast('Group deleted.');
+    }
+
+    await loadWatchers();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -621,6 +757,15 @@ fields.protocol.addEventListener('change', () => {
   fields.port.value = fields.protocol.value === 'sftp' ? 22 : 21;
 });
 els.addWatcherBtn.addEventListener('click', () => openForm());
+els.addGroupBtn.addEventListener('click', () => {
+  addGroup().catch((error) => showToast(error.message));
+});
+els.groupNameInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addGroup().catch((error) => showToast(error.message));
+  }
+});
 els.logoutBtn.addEventListener('click', async () => {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
   window.location.href = '/login';
@@ -647,6 +792,9 @@ els.reportBotStopBtn.addEventListener('click', async () => {
 els.closeDialogBtn.addEventListener('click', () => els.dialog.close());
 els.cancelBtn.addEventListener('click', () => els.dialog.close());
 els.closeLogDialogBtn.addEventListener('click', closeLiveLog);
+els.loadRemoteLogBtn.addEventListener('click', () => {
+  loadRemoteLogTail().catch((error) => showToast(error.message));
+});
 els.closeCommandDialogBtn.addEventListener('click', () => els.commandDialog.close());
 els.commandNodeBin.addEventListener('input', updateDeploymentCommand);
 els.commandLogPath.addEventListener('input', updateDeploymentCommand);
@@ -659,9 +807,11 @@ els.logDialog.addEventListener('close', () => {
   clearInterval(state.logPollTimer);
   state.logPollTimer = null;
   state.activeLogWatcherId = null;
+  state.activeLogRemoteLoaded = false;
 });
 els.form.addEventListener('submit', saveForm);
 els.watchersBody.addEventListener('click', handleAction);
+els.groupsList.addEventListener('click', handleGroupAction);
 
 async function init() {
   const authenticated = await ensureAuthenticated();
@@ -669,6 +819,7 @@ async function init() {
   document.body.classList.remove('authPending');
 
   loadWatchers().catch((error) => showToast(error.message));
+  loadGroups().catch((error) => showToast(error.message));
   loadPendingWebhooks().catch((error) => showToast(error.message));
   loadDiscordStatus().catch((error) => showToast(error.message));
   loadReportBotStatus().catch((error) => showToast(error.message));

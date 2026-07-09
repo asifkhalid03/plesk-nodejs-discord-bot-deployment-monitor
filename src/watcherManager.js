@@ -444,10 +444,10 @@ class WatcherManager {
     if (staleCount > 0) {
       console.warn(`Marked ${staleCount} stale deployment job(s) as failed after restart.`);
     }
-    const watchers = await db.listWatchers();
-    watchers.forEach((watcher) => {
-      this.processQueue(watcher.id).catch((error) => {
-        console.error(`Deployment queue processor failed for watcher ${watcher.id}:`, error);
+    const groups = await db.listWatcherGroups();
+    groups.forEach((group) => {
+      this.processGroupQueue(group.id).catch((error) => {
+        console.error(`Deployment queue processor failed for group ${group.id}:`, error);
       });
     });
   }
@@ -556,6 +556,54 @@ class WatcherManager {
     };
   }
 
+  async getRemoteLogTail(id, { maxBytes = 200000 } = {}) {
+    const numericId = Number(id);
+    const watcher = await db.getWatcher(numericId, { includeSecrets: true });
+    if (!watcher) throw new Error('Watcher not found.');
+
+    const safeMaxBytes = Math.min(Math.max(Number(maxBytes) || 200000, 4096), 1000000);
+    const client = createRemoteClient(watcher);
+    try {
+      await client.connect();
+      const resolvedPath = await resolveRemotePath(client, watcher.remotePath);
+      const stat = await client.stat(resolvedPath);
+      const startOffset = Math.max(0, stat.size - safeMaxBytes);
+      const chunk = await client.readRange(resolvedPath, startOffset, stat.size - 1);
+      let text = chunk.toString('utf8');
+
+      if (startOffset > 0) {
+        text = text.replace(/^[^\r\n]*(?:\r?\n|$)/, '');
+      }
+
+      const rawLines = text.length ? text.split(/\r?\n/) : [];
+      if (rawLines.length && rawLines[rawLines.length - 1] === '') rawLines.pop();
+      const now = new Date().toISOString();
+      const lines = rawLines.map((line) => ({
+        at: now,
+        jobId: this.activeJobs.get(numericId)?.id || null,
+        source: 'remote',
+        line
+      }));
+
+      return {
+        watcherId: numericId,
+        lines,
+        maxLines: lines.length,
+        truncated: startOffset > 0,
+        status: this.getStatus(numericId),
+        currentJob: this.activeJobs.get(numericId) || null,
+        remote: {
+          resolvedPath,
+          size: stat.size,
+          startOffset,
+          tailBytes: safeMaxBytes
+        }
+      };
+    } finally {
+      await client.close();
+    }
+  }
+
   async start(id) {
     await this.stop(id, { persist: false });
     this.clearLogs(id);
@@ -608,8 +656,8 @@ class WatcherManager {
       };
     }
 
-    this.processQueue(watcher.id).catch((error) => {
-      console.error(`Deployment queue processor failed for watcher ${watcher.id}:`, error);
+    this.processGroupQueue(watcher.groupId).catch((error) => {
+      console.error(`Deployment queue processor failed for group ${watcher.groupId}:`, error);
     });
     return {
       job,
@@ -637,12 +685,18 @@ class WatcherManager {
   }
 
   async processQueue(id) {
-    const numericId = Number(id);
+    const watcher = await db.getWatcher(id);
+    if (!watcher) throw new Error('Watcher not found.');
+    return this.processGroupQueue(watcher.groupId);
+  }
+
+  async processGroupQueue(groupId) {
+    const numericId = Number(groupId);
     if (this.queueProcessors.has(numericId)) return this.queueProcessors.get(numericId);
 
     const processor = this.runQueueLoop(numericId)
       .catch((error) => {
-        console.error(`Deployment queue loop failed for watcher ${numericId}:`, error);
+        console.error(`Deployment queue loop failed for group ${numericId}:`, error);
       })
       .finally(() => {
         this.queueProcessors.delete(numericId);
@@ -651,15 +705,15 @@ class WatcherManager {
     return processor;
   }
 
-  async runQueueLoop(id) {
+  async runQueueLoop(groupId) {
     while (true) {
-      const running = await db.getRunningDeploymentJob(id);
+      const running = await db.getRunningDeploymentJobForGroup(groupId);
       if (running) return;
 
-      const job = await db.getNextQueuedDeploymentJob(id);
+      const job = await db.getNextQueuedDeploymentJobForGroup(groupId);
       if (!job) break;
 
-      const watcher = await db.getWatcher(id, { includeSecrets: true });
+      const watcher = await db.getWatcher(job.watcherId, { includeSecrets: true });
       if (!watcher) {
         await db.markDeploymentJobFailed(job.id, 'Watcher was deleted before the deployment job could run.');
         continue;
@@ -668,16 +722,19 @@ class WatcherManager {
       await this.runDeploymentJob(watcher, job);
     }
 
-    const watcher = await db.getWatcher(id);
-    if (watcher?.enabled && !this.runtimes.has(Number(id))) {
-      try {
-        await this.start(id);
-      } catch (error) {
-        this.setStatus(id, {
-          state: 'error',
-          message: `Failed to restart enabled watcher after queue finished: ${error.message}`,
-          lastErrorAt: new Date().toISOString()
-        });
+    const watchers = await db.listWatchers();
+    const groupWatchers = watchers.filter((watcher) => Number(watcher.groupId) === Number(groupId));
+    for (const watcher of groupWatchers) {
+      if (watcher.enabled && !this.runtimes.has(Number(watcher.id))) {
+        try {
+          await this.start(watcher.id);
+        } catch (error) {
+          this.setStatus(watcher.id, {
+            state: 'error',
+            message: `Failed to restart enabled watcher after group queue finished: ${error.message}`,
+            lastErrorAt: new Date().toISOString()
+          });
+        }
       }
     }
   }

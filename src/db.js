@@ -14,6 +14,14 @@ async function initDb() {
   await db.exec(`
     PRAGMA journal_mode = WAL;
 
+    CREATE TABLE IF NOT EXISTS watcher_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS watchers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -41,6 +49,7 @@ async function initDb() {
       github_branch_filter TEXT NOT NULL DEFAULT '',
       deployment_timeout_seconds INTEGER NOT NULL DEFAULT 1800,
       deploy_webhook_retry_count INTEGER NOT NULL DEFAULT 3,
+      group_id INTEGER,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -81,13 +90,17 @@ async function initDb() {
   await ensureColumn('watchers', 'github_branch_filter', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('watchers', 'deployment_timeout_seconds', 'INTEGER NOT NULL DEFAULT 1800');
   await ensureColumn('watchers', 'deploy_webhook_retry_count', 'INTEGER NOT NULL DEFAULT 3');
+  await ensureColumn('watchers', 'group_id', 'INTEGER');
   await ensureColumn('deployment_jobs', 'webhook_method', "TEXT NOT NULL DEFAULT 'POST'");
   await ensureColumn('deployment_jobs', 'webhook_content_type', "TEXT NOT NULL DEFAULT 'application/json'");
   await ensureColumn('deployment_jobs', 'webhook_body', "TEXT NOT NULL DEFAULT ''");
+  const defaultGroupId = await ensureDefaultWatcherGroup();
+  await db.run('UPDATE watchers SET group_id = ? WHERE group_id IS NULL', defaultGroupId);
   await db.run('UPDATE watchers SET discord_enabled = 1 WHERE discord_enabled = 0 AND discord_channel != ""');
   await backfillWebhookTokens();
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_watchers_webhook_token ON watchers(webhook_token)');
   await db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_watcher_status_id ON deployment_jobs(watcher_id, status, id)');
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_watchers_group_id ON watchers(group_id)');
   return db;
 }
 
@@ -107,6 +120,35 @@ async function backfillWebhookTokens() {
   for (const row of rows) {
     await db.run('UPDATE watchers SET webhook_token = ? WHERE id = ?', createWebhookToken(), row.id);
   }
+}
+
+async function ensureDefaultWatcherGroup() {
+  let row = await db.get('SELECT id FROM watcher_groups WHERE is_default = 1 ORDER BY id ASC LIMIT 1');
+  if (row) return row.id;
+
+  row = await db.get('SELECT id FROM watcher_groups WHERE name = ?', 'Default');
+  if (row) {
+    await db.run('UPDATE watcher_groups SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?', row.id);
+    return row.id;
+  }
+
+  const result = await db.run(
+    'INSERT INTO watcher_groups (name, is_default) VALUES (?, 1)',
+    'Default'
+  );
+  return result.lastID;
+}
+
+function publicWatcherGroup(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    isDefault: Boolean(row.is_default),
+    watcherCount: row.watcher_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
 }
 
 function publicWatcher(row) {
@@ -137,6 +179,8 @@ function publicWatcher(row) {
     githubBranchFilter: row.github_branch_filter,
     deploymentTimeoutSeconds: row.deployment_timeout_seconds,
     deployWebhookRetryCount: row.deploy_webhook_retry_count,
+    groupId: row.group_id,
+    groupName: row.group_name || 'Default',
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -170,6 +214,8 @@ function publicDeploymentJob(row) {
     job.watcherName = row.watcher_name;
     job.watcherHost = row.watcher_host;
     job.watcherRemotePath = row.watcher_remote_path;
+    job.groupId = row.group_id;
+    job.groupName = row.group_name || 'Default';
   }
   return job;
 }
@@ -186,29 +232,100 @@ function runtimeWatcher(row) {
 }
 
 async function listWatchers() {
-  const rows = await db.all('SELECT * FROM watchers ORDER BY name COLLATE NOCASE');
+  const rows = await db.all(
+    `SELECT watchers.*, watcher_groups.name AS group_name
+     FROM watchers
+     LEFT JOIN watcher_groups ON watcher_groups.id = watchers.group_id
+     ORDER BY watcher_groups.name COLLATE NOCASE, watchers.name COLLATE NOCASE`
+  );
   return rows.map(publicWatcher);
 }
 
 async function getWatcher(id, { includeSecrets = false } = {}) {
-  const row = await db.get('SELECT * FROM watchers WHERE id = ?', id);
+  const row = await db.get(
+    `SELECT watchers.*, watcher_groups.name AS group_name
+     FROM watchers
+     LEFT JOIN watcher_groups ON watcher_groups.id = watchers.group_id
+     WHERE watchers.id = ?`,
+    id
+  );
   return includeSecrets ? runtimeWatcher(row) : publicWatcher(row);
 }
 
 async function getWatcherByWebhookToken(token) {
-  const row = await db.get('SELECT * FROM watchers WHERE webhook_token = ?', token);
+  const row = await db.get(
+    `SELECT watchers.*, watcher_groups.name AS group_name
+     FROM watchers
+     LEFT JOIN watcher_groups ON watcher_groups.id = watchers.group_id
+     WHERE watchers.webhook_token = ?`,
+    token
+  );
   return publicWatcher(row);
 }
 
+async function normalizeGroupId(groupId) {
+  if (!groupId) return ensureDefaultWatcherGroup();
+  const row = await db.get('SELECT id FROM watcher_groups WHERE id = ?', groupId);
+  if (!row) throw new Error('Watcher group not found.');
+  return row.id;
+}
+
+async function listWatcherGroups() {
+  const rows = await db.all(
+    `SELECT watcher_groups.*, COUNT(watchers.id) AS watcher_count
+     FROM watcher_groups
+     LEFT JOIN watchers ON watchers.group_id = watcher_groups.id
+     GROUP BY watcher_groups.id
+     ORDER BY watcher_groups.is_default DESC, watcher_groups.name COLLATE NOCASE`
+  );
+  return rows.map(publicWatcherGroup);
+}
+
+async function createWatcherGroup(input) {
+  const name = String(input.name || '').trim();
+  if (!name) throw new Error('Group name is required.');
+  const result = await db.run(
+    'INSERT INTO watcher_groups (name, is_default) VALUES (?, 0)',
+    name
+  );
+  const row = await db.get('SELECT * FROM watcher_groups WHERE id = ?', result.lastID);
+  return publicWatcherGroup(row);
+}
+
+async function updateWatcherGroup(id, input) {
+  const existing = await db.get('SELECT * FROM watcher_groups WHERE id = ?', id);
+  if (!existing) return null;
+  const name = String(input.name || '').trim();
+  if (!name) throw new Error('Group name is required.');
+  await db.run(
+    'UPDATE watcher_groups SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    name,
+    id
+  );
+  const row = await db.get('SELECT * FROM watcher_groups WHERE id = ?', id);
+  return publicWatcherGroup(row);
+}
+
+async function deleteWatcherGroup(id) {
+  const existing = await db.get('SELECT * FROM watcher_groups WHERE id = ?', id);
+  if (!existing) return false;
+  if (existing.is_default) throw new Error('Default group cannot be deleted.');
+  const defaultGroupId = await ensureDefaultWatcherGroup();
+  await db.run('UPDATE watchers SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?', defaultGroupId, id);
+  await db.run('DELETE FROM watcher_groups WHERE id = ?', id);
+  return true;
+}
+
 async function createWatcher(input) {
+  const groupId = await normalizeGroupId(input.groupId);
   const result = await db.run(
     `INSERT INTO watchers (
       name, protocol, host, port, username, password_encrypted, private_key_encrypted,
       remote_path, discord_channel, discord_enabled, poll_interval_seconds, enabled,
       auto_clear_enabled, auto_clear_time, auto_clear_limit, webhook_token,
       server_deploy_webhook_url, server_deploy_webhook_method, github_branch_filter,
-      deployment_timeout_seconds, deploy_webhook_retry_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      deployment_timeout_seconds, deploy_webhook_retry_count, group_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.name,
     input.protocol,
     input.host,
@@ -229,7 +346,8 @@ async function createWatcher(input) {
     input.serverDeployWebhookMethod || 'POST',
     input.githubBranchFilter || '',
     input.deploymentTimeoutSeconds || 1800,
-    input.deployWebhookRetryCount ?? 3
+    input.deployWebhookRetryCount ?? 3,
+    groupId
   );
   return getWatcher(result.lastID);
 }
@@ -237,6 +355,7 @@ async function createWatcher(input) {
 async function updateWatcher(id, input) {
   const existing = await db.get('SELECT * FROM watchers WHERE id = ?', id);
   if (!existing) return null;
+  const groupId = await normalizeGroupId(input.groupId);
 
   const passwordEncrypted =
     input.password === undefined ? existing.password_encrypted : encryptSecret(input.password);
@@ -250,7 +369,7 @@ async function updateWatcher(id, input) {
       discord_channel = ?, discord_enabled = ?, poll_interval_seconds = ?, enabled = ?,
       auto_clear_enabled = ?, auto_clear_time = ?, auto_clear_limit = ?,
       server_deploy_webhook_url = ?, server_deploy_webhook_method = ?, github_branch_filter = ?,
-      deployment_timeout_seconds = ?, deploy_webhook_retry_count = ?,
+      deployment_timeout_seconds = ?, deploy_webhook_retry_count = ?, group_id = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     input.name,
@@ -273,6 +392,7 @@ async function updateWatcher(id, input) {
     input.githubBranchFilter || '',
     input.deploymentTimeoutSeconds || 1800,
     input.deployWebhookRetryCount ?? 3,
+    groupId,
     id
   );
   return getWatcher(id);
@@ -368,9 +488,12 @@ async function listPendingDeploymentJobs({ limit = 100 } = {}) {
        deployment_jobs.*,
        watchers.name AS watcher_name,
        watchers.host AS watcher_host,
-       watchers.remote_path AS watcher_remote_path
+       watchers.remote_path AS watcher_remote_path,
+       watchers.group_id AS group_id,
+       watcher_groups.name AS group_name
      FROM deployment_jobs
      JOIN watchers ON watchers.id = deployment_jobs.watcher_id
+     LEFT JOIN watcher_groups ON watcher_groups.id = watchers.group_id
      WHERE deployment_jobs.status IN ('queued', 'running')
      ORDER BY
        CASE deployment_jobs.status WHEN 'running' THEN 0 ELSE 1 END,
@@ -392,6 +515,19 @@ async function getNextQueuedDeploymentJob(watcherId) {
   return publicDeploymentJob(row);
 }
 
+async function getNextQueuedDeploymentJobForGroup(groupId) {
+  const row = await db.get(
+    `SELECT deployment_jobs.*
+     FROM deployment_jobs
+     JOIN watchers ON watchers.id = deployment_jobs.watcher_id
+     WHERE watchers.group_id = ? AND deployment_jobs.status = 'queued'
+     ORDER BY deployment_jobs.id ASC
+     LIMIT 1`,
+    groupId
+  );
+  return publicDeploymentJob(row);
+}
+
 async function getRunningDeploymentJob(watcherId) {
   const row = await db.get(
     `SELECT * FROM deployment_jobs
@@ -399,6 +535,19 @@ async function getRunningDeploymentJob(watcherId) {
      ORDER BY id ASC
      LIMIT 1`,
     watcherId
+  );
+  return publicDeploymentJob(row);
+}
+
+async function getRunningDeploymentJobForGroup(groupId) {
+  const row = await db.get(
+    `SELECT deployment_jobs.*
+     FROM deployment_jobs
+     JOIN watchers ON watchers.id = deployment_jobs.watcher_id
+     WHERE watchers.group_id = ? AND deployment_jobs.status = 'running'
+     ORDER BY deployment_jobs.id ASC
+     LIMIT 1`,
+    groupId
   );
   return publicDeploymentJob(row);
 }
@@ -491,6 +640,10 @@ async function getDeploymentJobSummary(watcherId) {
 
 module.exports = {
   initDb,
+  listWatcherGroups,
+  createWatcherGroup,
+  updateWatcherGroup,
+  deleteWatcherGroup,
   listWatchers,
   getWatcher,
   getWatcherByWebhookToken,
@@ -506,7 +659,9 @@ module.exports = {
   listDeploymentJobs,
   listPendingDeploymentJobs,
   getNextQueuedDeploymentJob,
+  getNextQueuedDeploymentJobForGroup,
   getRunningDeploymentJob,
+  getRunningDeploymentJobForGroup,
   markDeploymentJobRunning,
   updateDeploymentJobAttempts,
   markDeploymentJobCompleted,
