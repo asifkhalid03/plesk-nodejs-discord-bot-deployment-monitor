@@ -581,15 +581,33 @@ class WatcherManager {
   async enqueueDeployment(id, jobInput) {
     const watcher = await db.getWatcher(id);
     if (!watcher) throw new Error('Watcher not found.');
-    if (!watcher.serverDeployWebhookUrl) {
-      throw new Error('serverDeployWebhookUrl is required before GitHub push webhooks can enqueue deployments.');
-    }
 
     const job = await db.createDeploymentJob({
       watcherId: watcher.id,
       ...jobInput,
       logStartOffset: watcher.lastOffset || 0
     });
+
+    if (!watcher.serverDeployWebhookUrl) {
+      const failedJob = await db.markDeploymentJobFailed(
+        job.id,
+        'Server deploy webhook URL is required before GitHub push webhooks can run deployments.'
+      );
+      this.setStatus(watcher.id, {
+        id: watcher.id,
+        name: watcher.name,
+        state: 'error',
+        message: `Deployment job #${job.id} failed: server deploy webhook URL is missing`,
+        connected: false,
+        polling: false,
+        lastErrorAt: new Date().toISOString()
+      });
+      return {
+        job: failedJob,
+        summary: await db.getDeploymentJobSummary(watcher.id)
+      };
+    }
+
     this.processQueue(watcher.id).catch((error) => {
       console.error(`Deployment queue processor failed for watcher ${watcher.id}:`, error);
     });
