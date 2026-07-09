@@ -36,8 +36,33 @@ async function initDb() {
       auto_clear_limit TEXT NOT NULL DEFAULT '100',
       auto_clear_last_run_date TEXT,
       webhook_token TEXT UNIQUE,
+      server_deploy_webhook_url TEXT NOT NULL DEFAULT '',
+      github_branch_filter TEXT NOT NULL DEFAULT '',
+      deployment_timeout_seconds INTEGER NOT NULL DEFAULT 1800,
+      deploy_webhook_retry_count INTEGER NOT NULL DEFAULT 3,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS deployment_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      watcher_id INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+      github_delivery_id TEXT,
+      github_event TEXT NOT NULL DEFAULT 'push',
+      github_ref TEXT,
+      github_branch TEXT,
+      commit_sha TEXT,
+      commit_message TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT NOT NULL DEFAULT '',
+      log_start_offset INTEGER,
+      log_end_offset INTEGER,
+      queued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(watcher_id) REFERENCES watchers(id) ON DELETE CASCADE
     );
   `);
   await ensureColumn('watchers', 'last_remote_path', 'TEXT');
@@ -47,9 +72,14 @@ async function initDb() {
   await ensureColumn('watchers', 'auto_clear_limit', "TEXT NOT NULL DEFAULT '100'");
   await ensureColumn('watchers', 'auto_clear_last_run_date', 'TEXT');
   await ensureColumn('watchers', 'webhook_token', 'TEXT');
+  await ensureColumn('watchers', 'server_deploy_webhook_url', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('watchers', 'github_branch_filter', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('watchers', 'deployment_timeout_seconds', 'INTEGER NOT NULL DEFAULT 1800');
+  await ensureColumn('watchers', 'deploy_webhook_retry_count', 'INTEGER NOT NULL DEFAULT 3');
   await db.run('UPDATE watchers SET discord_enabled = 1 WHERE discord_enabled = 0 AND discord_channel != ""');
   await backfillWebhookTokens();
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_watchers_webhook_token ON watchers(webhook_token)');
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_watcher_status_id ON deployment_jobs(watcher_id, status, id)');
   return db;
 }
 
@@ -94,9 +124,42 @@ function publicWatcher(row) {
     autoClearLimit: row.auto_clear_limit,
     autoClearLastRunDate: row.auto_clear_last_run_date,
     webhookToken: row.webhook_token,
+    serverDeployWebhookUrl: row.server_deploy_webhook_url,
+    githubBranchFilter: row.github_branch_filter,
+    deploymentTimeoutSeconds: row.deployment_timeout_seconds,
+    deployWebhookRetryCount: row.deploy_webhook_retry_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function publicDeploymentJob(row) {
+  if (!row) return null;
+  const job = {
+    id: row.id,
+    watcherId: row.watcher_id,
+    status: row.status,
+    githubDeliveryId: row.github_delivery_id,
+    githubEvent: row.github_event,
+    githubRef: row.github_ref,
+    githubBranch: row.github_branch,
+    commitSha: row.commit_sha,
+    commitMessage: row.commit_message,
+    attempts: row.attempts,
+    errorMessage: row.error_message,
+    logStartOffset: row.log_start_offset,
+    logEndOffset: row.log_end_offset,
+    queuedAt: row.queued_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    updatedAt: row.updated_at
+  };
+  if (row.watcher_name !== undefined) {
+    job.watcherName = row.watcher_name;
+    job.watcherHost = row.watcher_host;
+    job.watcherRemotePath = row.watcher_remote_path;
+  }
+  return job;
 }
 
 function runtimeWatcher(row) {
@@ -130,8 +193,10 @@ async function createWatcher(input) {
     `INSERT INTO watchers (
       name, protocol, host, port, username, password_encrypted, private_key_encrypted,
       remote_path, discord_channel, discord_enabled, poll_interval_seconds, enabled,
-      auto_clear_enabled, auto_clear_time, auto_clear_limit, webhook_token
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      auto_clear_enabled, auto_clear_time, auto_clear_limit, webhook_token,
+      server_deploy_webhook_url, github_branch_filter, deployment_timeout_seconds,
+      deploy_webhook_retry_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.name,
     input.protocol,
     input.host,
@@ -147,7 +212,11 @@ async function createWatcher(input) {
     input.autoClearEnabled ? 1 : 0,
     input.autoClearTime,
     input.autoClearLimit,
-    createWebhookToken()
+    createWebhookToken(),
+    input.serverDeployWebhookUrl || '',
+    input.githubBranchFilter || '',
+    input.deploymentTimeoutSeconds || 1800,
+    input.deployWebhookRetryCount ?? 3
   );
   return getWatcher(result.lastID);
 }
@@ -167,6 +236,8 @@ async function updateWatcher(id, input) {
       password_encrypted = ?, private_key_encrypted = ?, remote_path = ?,
       discord_channel = ?, discord_enabled = ?, poll_interval_seconds = ?, enabled = ?,
       auto_clear_enabled = ?, auto_clear_time = ?, auto_clear_limit = ?,
+      server_deploy_webhook_url = ?, github_branch_filter = ?,
+      deployment_timeout_seconds = ?, deploy_webhook_retry_count = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     input.name,
@@ -184,6 +255,10 @@ async function updateWatcher(id, input) {
     input.autoClearEnabled ? 1 : 0,
     input.autoClearTime,
     input.autoClearLimit,
+    input.serverDeployWebhookUrl || '',
+    input.githubBranchFilter || '',
+    input.deploymentTimeoutSeconds || 1800,
+    input.deployWebhookRetryCount ?? 3,
     id
   );
   return getWatcher(id);
@@ -232,6 +307,170 @@ async function resetWebhookToken(id) {
   return getWatcher(id);
 }
 
+async function createDeploymentJob(input) {
+  const result = await db.run(
+    `INSERT INTO deployment_jobs (
+      watcher_id, status, github_delivery_id, github_event, github_ref, github_branch,
+      commit_sha, commit_message, log_start_offset
+    ) VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+    input.watcherId,
+    input.githubDeliveryId || '',
+    input.githubEvent || 'push',
+    input.githubRef || '',
+    input.githubBranch || '',
+    input.commitSha || '',
+    input.commitMessage || '',
+    input.logStartOffset ?? null
+  );
+  return getDeploymentJob(result.lastID);
+}
+
+async function getDeploymentJob(id) {
+  const row = await db.get('SELECT * FROM deployment_jobs WHERE id = ?', id);
+  return publicDeploymentJob(row);
+}
+
+async function listDeploymentJobs(watcherId, { limit = 50 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const rows = await db.all(
+    `SELECT * FROM deployment_jobs
+     WHERE watcher_id = ?
+     ORDER BY id DESC
+     LIMIT ?`,
+    watcherId,
+    safeLimit
+  );
+  return rows.map(publicDeploymentJob);
+}
+
+async function listPendingDeploymentJobs({ limit = 100 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  const rows = await db.all(
+    `SELECT
+       deployment_jobs.*,
+       watchers.name AS watcher_name,
+       watchers.host AS watcher_host,
+       watchers.remote_path AS watcher_remote_path
+     FROM deployment_jobs
+     JOIN watchers ON watchers.id = deployment_jobs.watcher_id
+     WHERE deployment_jobs.status IN ('queued', 'running')
+     ORDER BY
+       CASE deployment_jobs.status WHEN 'running' THEN 0 ELSE 1 END,
+       deployment_jobs.id ASC
+     LIMIT ?`,
+    safeLimit
+  );
+  return rows.map(publicDeploymentJob);
+}
+
+async function getNextQueuedDeploymentJob(watcherId) {
+  const row = await db.get(
+    `SELECT * FROM deployment_jobs
+     WHERE watcher_id = ? AND status = 'queued'
+     ORDER BY id ASC
+     LIMIT 1`,
+    watcherId
+  );
+  return publicDeploymentJob(row);
+}
+
+async function getRunningDeploymentJob(watcherId) {
+  const row = await db.get(
+    `SELECT * FROM deployment_jobs
+     WHERE watcher_id = ? AND status = 'running'
+     ORDER BY id ASC
+     LIMIT 1`,
+    watcherId
+  );
+  return publicDeploymentJob(row);
+}
+
+async function markDeploymentJobRunning(id, attempts = 0) {
+  await db.run(
+    `UPDATE deployment_jobs
+     SET status = 'running', attempts = ?, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+         updated_at = CURRENT_TIMESTAMP, error_message = ''
+     WHERE id = ?`,
+    attempts,
+    id
+  );
+  return getDeploymentJob(id);
+}
+
+async function updateDeploymentJobAttempts(id, attempts) {
+  await db.run(
+    'UPDATE deployment_jobs SET attempts = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    attempts,
+    id
+  );
+  return getDeploymentJob(id);
+}
+
+async function markDeploymentJobCompleted(id, { logEndOffset = null } = {}) {
+  await db.run(
+    `UPDATE deployment_jobs
+     SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+         error_message = '', log_end_offset = COALESCE(?, log_end_offset)
+     WHERE id = ?`,
+    logEndOffset,
+    id
+  );
+  return getDeploymentJob(id);
+}
+
+async function markDeploymentJobFailed(id, errorMessage, { logEndOffset = null } = {}) {
+  await db.run(
+    `UPDATE deployment_jobs
+     SET status = 'failed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+         error_message = ?, log_end_offset = COALESCE(?, log_end_offset)
+     WHERE id = ?`,
+    String(errorMessage || 'Deployment job failed.').slice(0, 2000),
+    logEndOffset,
+    id
+  );
+  return getDeploymentJob(id);
+}
+
+async function markDeploymentJobCancelled(id) {
+  await db.run(
+    `UPDATE deployment_jobs
+     SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'queued'`,
+    id
+  );
+  return getDeploymentJob(id);
+}
+
+async function failStaleRunningDeploymentJobs() {
+  const result = await db.run(
+    `UPDATE deployment_jobs
+     SET status = 'failed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+         error_message = 'App restarted while deployment job was running.'
+     WHERE status = 'running'`
+  );
+  return result.changes || 0;
+}
+
+async function getDeploymentJobSummary(watcherId) {
+  const queued = await db.get(
+    "SELECT COUNT(*) AS count FROM deployment_jobs WHERE watcher_id = ? AND status = 'queued'",
+    watcherId
+  );
+  const running = await getRunningDeploymentJob(watcherId);
+  const latest = await db.get(
+    `SELECT * FROM deployment_jobs
+     WHERE watcher_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    watcherId
+  );
+  return {
+    queuedCount: queued?.count || 0,
+    runningJob: running,
+    latestJob: publicDeploymentJob(latest)
+  };
+}
+
 module.exports = {
   initDb,
   listWatchers,
@@ -243,5 +482,18 @@ module.exports = {
   setEnabled,
   saveProgress,
   markAutoClearRun,
-  resetWebhookToken
+  resetWebhookToken,
+  createDeploymentJob,
+  getDeploymentJob,
+  listDeploymentJobs,
+  listPendingDeploymentJobs,
+  getNextQueuedDeploymentJob,
+  getRunningDeploymentJob,
+  markDeploymentJobRunning,
+  updateDeploymentJobAttempts,
+  markDeploymentJobCompleted,
+  markDeploymentJobFailed,
+  markDeploymentJobCancelled,
+  failStaleRunningDeploymentJobs,
+  getDeploymentJobSummary
 };

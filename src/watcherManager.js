@@ -2,6 +2,12 @@ const db = require('./db');
 const config = require('./config');
 const { createRemoteClient, resolveRemotePath, isRemotePathNotFoundError } = require('./remoteClients');
 
+const DEPLOY_WEBHOOK_BACKOFF_MS = [2000, 5000, 10000];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class WatcherRuntime {
   constructor(watcher, discordService, onStatus, options = {}) {
     this.watcher = watcher;
@@ -9,6 +15,7 @@ class WatcherRuntime {
     this.onStatus = onStatus;
     this.options = options;
     this.onLog = options.onLog || (() => {});
+    this.onFinished = options.onFinished || (() => {});
     this.client = null;
     this.timer = null;
     this.running = false;
@@ -18,6 +25,8 @@ class WatcherRuntime {
     this.deploymentBuffer = [];
     this.deploymentBufferUpdatedAt = 0;
     this.finishSeen = false;
+    this.finishNotified = false;
+    this.startAtEndCaptured = false;
   }
 
   status(patch) {
@@ -41,7 +50,7 @@ class WatcherRuntime {
     this.status({ state: 'starting', message: this.options.stopWhenFinished ? 'Webhook triggered watcher' : 'Starting watcher' });
     try {
       await this.withTimeout(this.connect(), config.remoteConnectTimeoutMs, 'Remote connection timed out');
-      this.schedule(0);
+      if (!this.options.deferFirstTick) this.schedule(0);
     } catch (error) {
       this.running = false;
       await this.disconnect();
@@ -56,13 +65,13 @@ class WatcherRuntime {
     }
   }
 
-  async stop() {
+  async stop({ silent = false } = {}) {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.flushDeploymentBuffer('watcher stopped');
     await this.disconnect();
-    this.status({ state: 'stopped', message: 'Stopped' });
+    if (!silent) this.status({ state: 'stopped', message: 'Stopped' });
   }
 
   async connect() {
@@ -96,7 +105,13 @@ class WatcherRuntime {
       return;
     }
 
-    if (!this.watcher.lastOffset && !this.watcher.lastRemotePath) {
+    if (this.options.startAtEnd) {
+      this.watcher.lastOffset = stat.size;
+      this.watcher.partialLine = '';
+      this.watcher.lastRemotePath = this.currentRemotePath;
+      await db.saveProgress(this.watcher.id, stat.size, '', this.currentRemotePath);
+      this.startAtEndCaptured = true;
+    } else if (!this.watcher.lastOffset && !this.watcher.lastRemotePath) {
       this.watcher.lastOffset = stat.size;
       this.watcher.lastRemotePath = this.currentRemotePath;
       await db.saveProgress(this.watcher.id, this.watcher.lastOffset, '', this.currentRemotePath);
@@ -224,6 +239,12 @@ class WatcherRuntime {
       });
     }
 
+    if (this.options.startAtEnd && !this.startAtEndCaptured) {
+      offset = 0;
+      partial = '';
+      this.startAtEndCaptured = true;
+    }
+
     if (stat.size === offset) {
       const flushedCount = await this.flushDeploymentBufferIfIdle();
       this.status({
@@ -279,8 +300,18 @@ class WatcherRuntime {
         message: 'Deployment finished; stopping webhook-triggered watcher',
         lastUpdateAt: new Date().toISOString()
       });
-      await this.stop();
+      this.notifyFinished();
+      await this.stop({ silent: this.options.silentStopWhenFinished });
     }
+  }
+
+  notifyFinished() {
+    if (this.finishNotified) return;
+    this.finishNotified = true;
+    this.onFinished(this.watcher.id, {
+      remotePath: this.currentRemotePath,
+      lastOffset: this.watcher.lastOffset || 0
+    });
   }
 
   async handleLogLines(lines) {
@@ -383,6 +414,8 @@ class WatcherManager {
     this.logBuffers = new Map();
     this.maxLogLines = 5000;
     this.autoClearTimer = null;
+    this.queueProcessors = new Map();
+    this.activeJobs = new Map();
   }
 
   async startEnabledWatchers() {
@@ -404,6 +437,19 @@ class WatcherManager {
       }
     });
     this.startAutoClearScheduler();
+  }
+
+  async startDeploymentQueues() {
+    const staleCount = await db.failStaleRunningDeploymentJobs();
+    if (staleCount > 0) {
+      console.warn(`Marked ${staleCount} stale deployment job(s) as failed after restart.`);
+    }
+    const watchers = await db.listWatchers();
+    watchers.forEach((watcher) => {
+      this.processQueue(watcher.id).catch((error) => {
+        console.error(`Deployment queue processor failed for watcher ${watcher.id}:`, error);
+      });
+    });
   }
 
   startAutoClearScheduler() {
@@ -475,10 +521,12 @@ class WatcherManager {
 
   appendLogs(id, lines) {
     const numericId = Number(id);
+    const activeJob = this.activeJobs.get(numericId);
     const entries = lines
       .filter((line) => line !== undefined)
       .map((line) => ({
         at: new Date().toISOString(),
+        jobId: activeJob?.id || null,
         line: String(line)
       }));
     if (entries.length === 0) return;
@@ -503,7 +551,8 @@ class WatcherManager {
       lines,
       maxLines: this.maxLogLines,
       truncated: lines.length >= this.maxLogLines,
-      status: this.getStatus(numericId)
+      status: this.getStatus(numericId),
+      currentJob: this.activeJobs.get(numericId) || null
     };
   }
 
@@ -527,6 +576,242 @@ class WatcherManager {
       throw error;
     }
     return this.getStatus(id);
+  }
+
+  async enqueueDeployment(id, jobInput) {
+    const watcher = await db.getWatcher(id);
+    if (!watcher) throw new Error('Watcher not found.');
+    if (!watcher.serverDeployWebhookUrl) {
+      throw new Error('serverDeployWebhookUrl is required before GitHub push webhooks can enqueue deployments.');
+    }
+
+    const job = await db.createDeploymentJob({
+      watcherId: watcher.id,
+      ...jobInput,
+      logStartOffset: watcher.lastOffset || 0
+    });
+    this.processQueue(watcher.id).catch((error) => {
+      console.error(`Deployment queue processor failed for watcher ${watcher.id}:`, error);
+    });
+    return {
+      job,
+      summary: await db.getDeploymentJobSummary(watcher.id)
+    };
+  }
+
+  async getJobSummary(id) {
+    return db.getDeploymentJobSummary(id);
+  }
+
+  async listJobs(id, options) {
+    const watcher = await db.getWatcher(id);
+    if (!watcher) throw new Error('Watcher not found.');
+    return db.listDeploymentJobs(id, options);
+  }
+
+  async cancelJob(watcherId, jobId) {
+    const job = await db.getDeploymentJob(jobId);
+    if (!job || Number(job.watcherId) !== Number(watcherId)) throw new Error('Deployment job not found.');
+    if (job.status !== 'queued') {
+      throw new Error('Only queued deployment jobs can be cancelled.');
+    }
+    return db.markDeploymentJobCancelled(job.id);
+  }
+
+  async processQueue(id) {
+    const numericId = Number(id);
+    if (this.queueProcessors.has(numericId)) return this.queueProcessors.get(numericId);
+
+    const processor = this.runQueueLoop(numericId)
+      .catch((error) => {
+        console.error(`Deployment queue loop failed for watcher ${numericId}:`, error);
+      })
+      .finally(() => {
+        this.queueProcessors.delete(numericId);
+      });
+    this.queueProcessors.set(numericId, processor);
+    return processor;
+  }
+
+  async runQueueLoop(id) {
+    while (true) {
+      const running = await db.getRunningDeploymentJob(id);
+      if (running) return;
+
+      const job = await db.getNextQueuedDeploymentJob(id);
+      if (!job) break;
+
+      const watcher = await db.getWatcher(id, { includeSecrets: true });
+      if (!watcher) {
+        await db.markDeploymentJobFailed(job.id, 'Watcher was deleted before the deployment job could run.');
+        continue;
+      }
+
+      await this.runDeploymentJob(watcher, job);
+    }
+
+    const watcher = await db.getWatcher(id);
+    if (watcher?.enabled && !this.runtimes.has(Number(id))) {
+      try {
+        await this.start(id);
+      } catch (error) {
+        this.setStatus(id, {
+          state: 'error',
+          message: `Failed to restart enabled watcher after queue finished: ${error.message}`,
+          lastErrorAt: new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  async runDeploymentJob(watcher, job) {
+    const numericId = Number(watcher.id);
+    let runtime = null;
+    let timeoutHandle = null;
+
+    await db.markDeploymentJobRunning(job.id, 0);
+    const activeJob = await db.getDeploymentJob(job.id);
+    this.activeJobs.set(numericId, activeJob);
+    this.clearLogs(numericId);
+    await this.stop(numericId, { persist: false });
+
+    this.setStatus(numericId, {
+      id: numericId,
+      name: watcher.name,
+      state: 'starting',
+      message: `Queued deployment job #${job.id} starting`,
+      connected: false,
+      polling: false,
+      lastUpdateAt: new Date().toISOString()
+    });
+
+    try {
+      if (this.discordService.isConfigured() && watcher.discordEnabled && watcher.discordChannel) {
+        await this.clearChannelForDeployment(watcher);
+      }
+
+      let finishResolve;
+      const finishPromise = new Promise((resolve) => {
+        finishResolve = resolve;
+      });
+
+      runtime = new WatcherRuntime(
+        watcher,
+        this.discordService,
+        (watcherId, status) => {
+          this.setStatus(watcherId, status);
+          if (status.state === 'stopped') this.runtimes.delete(Number(watcherId));
+        },
+        {
+          stopWhenFinished: true,
+          deferFirstTick: true,
+          silentStopWhenFinished: true,
+          startAtEnd: true,
+          pollIntervalSeconds: config.webhookTriggerPollIntervalSeconds,
+          onLog: (watcherId, lines) => this.appendLogs(watcherId, lines),
+          onFinished: (watcherId, info) => {
+            finishResolve({ watcherId, ...info });
+          }
+        }
+      );
+
+      this.runtimes.set(numericId, runtime);
+      await runtime.start();
+      await runtime.pollOnce();
+      runtime.schedule(runtime.getPollIntervalSeconds() * 1000);
+
+      await this.callServerDeployWebhook(watcher, job.id);
+
+      const timeoutMs = Math.max(Number(watcher.deploymentTimeoutSeconds) || 1800, 1) * 1000;
+      const timeoutPromise = new Promise((resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`Deployment timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+        }, timeoutMs);
+      });
+
+      const finishInfo = await Promise.race([finishPromise, timeoutPromise]);
+      clearTimeout(timeoutHandle);
+      timeoutHandle = null;
+      const completed = await db.markDeploymentJobCompleted(job.id, {
+        logEndOffset: finishInfo?.lastOffset ?? watcher.lastOffset ?? null
+      });
+      this.activeJobs.set(numericId, completed);
+      this.setStatus(numericId, {
+        state: 'stopped',
+        message: `Deployment job #${job.id} completed`,
+        lastUpdateAt: new Date().toISOString(),
+        lastOffset: finishInfo?.lastOffset
+      });
+    } catch (error) {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      const status = this.getStatus(numericId);
+      const failed = await db.markDeploymentJobFailed(job.id, error.message, {
+        logEndOffset: status.lastOffset ?? watcher.lastOffset ?? null
+      });
+      this.activeJobs.set(numericId, failed);
+      this.setStatus(numericId, {
+        state: 'error',
+        message: `Deployment job #${job.id} failed: ${error.message}`,
+        lastErrorAt: new Date().toISOString()
+      });
+    } finally {
+      if (runtime && this.runtimes.get(numericId) === runtime) {
+        await runtime.stop({ silent: true }).catch(() => {});
+        this.runtimes.delete(numericId);
+      }
+      this.activeJobs.delete(numericId);
+    }
+  }
+
+  async callServerDeployWebhook(watcher, jobId) {
+    const retryCount = Math.max(0, Number(watcher.deployWebhookRetryCount) || 0);
+    const totalAttempts = retryCount + 1;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+      await db.updateDeploymentJobAttempts(jobId, attempt);
+      this.setStatus(watcher.id, {
+        state: 'running',
+        message: `Calling server deploy webhook for job #${jobId} (attempt ${attempt}/${totalAttempts})`,
+        lastUpdateAt: new Date().toISOString()
+      });
+
+      try {
+        await this.fetchDeployWebhook(watcher.serverDeployWebhookUrl);
+        this.setStatus(watcher.id, {
+          state: 'running',
+          message: `Server deploy webhook accepted job #${jobId}; waiting for finish marker`,
+          lastUpdateAt: new Date().toISOString()
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < totalAttempts) {
+          await sleep(DEPLOY_WEBHOOK_BACKOFF_MS[Math.min(attempt - 1, DEPLOY_WEBHOOK_BACKOFF_MS.length - 1)]);
+        }
+      }
+    }
+
+    throw new Error(`Server deploy webhook failed after ${totalAttempts} attempt(s): ${lastError?.message || 'Unknown error'}`);
+  }
+
+  async fetchDeployWebhook(url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.remoteConnectTimeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        const detail = body ? `: ${body.slice(0, 300)}` : '';
+        throw new Error(`HTTP ${response.status}${detail}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async triggerWebhook(id) {

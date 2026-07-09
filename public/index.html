@@ -93,6 +93,20 @@
         </div>
       </section>
 
+      <!-- Pending Webhooks -->
+      <section class="pendingWebhooks">
+        <div class="sectionHead">
+          <div>
+            <h2>Pending webhooks</h2>
+            <p id="pendingWebhooksSummary">Loading pending webhook jobs...</p>
+          </div>
+        </div>
+        <div id="pendingWebhooksEmpty" class="empty compact hidden">
+          No pending webhook jobs.
+        </div>
+        <div id="pendingWebhooksList" class="pendingList"></div>
+      </section>
+
       <!-- Watcher Table -->
       <section class="toolbar">
         <div id="summary">Loading watchers...</div>
@@ -179,6 +193,26 @@
           <label class="wide">
             Remote log path
             <input id="remotePath" required placeholder="deploy.log" />
+          </label>
+
+          <label class="wide">
+            Server deploy webhook URL
+            <input id="serverDeployWebhookUrl" type="url" placeholder="https://example.com/deploy-webhook" />
+          </label>
+
+          <label>
+            GitHub branch filter
+            <input id="githubBranchFilter" placeholder="Optional, e.g. main" />
+          </label>
+
+          <label>
+            Deployment timeout seconds
+            <input id="deploymentTimeoutSeconds" type="number" min="30" value="1800" />
+          </label>
+
+          <label>
+            Deploy webhook retry count
+            <input id="deployWebhookRetryCount" type="number" min="0" max="10" value="3" />
           </label>
 
           <label>

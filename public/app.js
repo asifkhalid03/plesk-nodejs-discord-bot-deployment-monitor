@@ -1,5 +1,6 @@
 const state = {
   watchers: [],
+  pendingJobs: [],
   discordStatus: null,
   activeLogWatcherId: null,
   logPollTimer: null
@@ -14,6 +15,9 @@ const els = {
   reportBotSummary: document.querySelector('#reportBotSummary'),
   discordSummary: document.querySelector('#discordSummary'),
   discordBadge: document.querySelector('#discordBadge'),
+  pendingWebhooksSummary: document.querySelector('#pendingWebhooksSummary'),
+  pendingWebhooksEmpty: document.querySelector('#pendingWebhooksEmpty'),
+  pendingWebhooksList: document.querySelector('#pendingWebhooksList'),
   watchersBody: document.querySelector('#watchersBody'),
   emptyState: document.querySelector('#emptyState'),
   summary: document.querySelector('#summary'),
@@ -45,6 +49,10 @@ const fields = {
   password: document.querySelector('#password'),
   privateKey: document.querySelector('#privateKey'),
   remotePath: document.querySelector('#remotePath'),
+  serverDeployWebhookUrl: document.querySelector('#serverDeployWebhookUrl'),
+  githubBranchFilter: document.querySelector('#githubBranchFilter'),
+  deploymentTimeoutSeconds: document.querySelector('#deploymentTimeoutSeconds'),
+  deployWebhookRetryCount: document.querySelector('#deployWebhookRetryCount'),
   discordChannel: document.querySelector('#discordChannel'),
   discordEnabled: document.querySelector('#discordEnabled'),
   pollIntervalSeconds: document.querySelector('#pollIntervalSeconds'),
@@ -146,6 +154,71 @@ function webhookUrl(watcher) {
   return watcher.webhookToken ? `${location.origin}/hooks/${watcher.webhookToken}` : '';
 }
 
+function formatJobSummary(summary) {
+  const queuedCount = summary?.queuedCount || 0;
+  const runningJob = summary?.runningJob;
+  const latestJob = summary?.latestJob;
+
+  if (runningJob) {
+    return `Job #${runningJob.id} running · ${queuedCount} queued`;
+  }
+
+  if (latestJob) {
+    const branch = latestJob.githubBranch ? ` · ${latestJob.githubBranch}` : '';
+    return `Latest job #${latestJob.id}: ${latestJob.status}${branch} · ${queuedCount} queued`;
+  }
+
+  return `No queued jobs`;
+}
+
+function formatLatestJobError(summary) {
+  const latestJob = summary?.latestJob;
+  if (!latestJob?.errorMessage) return '';
+  return latestJob.errorMessage;
+}
+
+function shortSha(value) {
+  return value ? String(value).slice(0, 7) : '';
+}
+
+function renderPendingWebhooks() {
+  const jobs = state.pendingJobs || [];
+  els.pendingWebhooksEmpty.classList.toggle('hidden', jobs.length > 0);
+  els.pendingWebhooksList.innerHTML = '';
+  els.pendingWebhooksSummary.textContent = `${jobs.length} pending webhook job${jobs.length === 1 ? '' : 's'}`;
+
+  for (const job of jobs) {
+    const item = document.createElement('div');
+    item.className = 'pendingJob';
+    const branch = job.githubBranch || job.githubRef || 'all branches';
+    const sha = shortSha(job.commitSha);
+    const message = job.commitMessage || 'No commit message';
+    const startedOrQueued = job.status === 'running' ? job.startedAt : job.queuedAt;
+
+    item.innerHTML = `
+      <div class="pendingJobMain">
+        <div>
+          <div class="pendingTitle">
+            <span class="status ${statusClass(job.status)}"><span class="dot"></span>${escapeHtml(job.status)}</span>
+            <strong>#${escapeHtml(job.id)} ${escapeHtml(job.watcherName || `Watcher ${job.watcherId}`)}</strong>
+          </div>
+          <div class="subtle">${escapeHtml(branch)}${sha ? ` - ${escapeHtml(sha)}` : ''} - ${escapeHtml(message)}</div>
+          <div class="subtle">${escapeHtml(job.watcherHost || '')}${job.watcherRemotePath ? ` - ${escapeHtml(job.watcherRemotePath)}` : ''}</div>
+        </div>
+        <div class="pendingMeta">
+          <div>${escapeHtml(formatDate(startedOrQueued))}</div>
+          <div class="subtle">${escapeHtml(job.githubDeliveryId || 'No delivery id')}</div>
+        </div>
+      </div>
+      <div class="pendingActions">
+        <button data-action="view-log" data-id="${job.watcherId}">${icon('eye')}View log</button>
+        <button data-action="cancel-job" data-id="${job.watcherId}" data-job-id="${job.id}" ${job.status === 'queued' ? '' : 'disabled'}>Cancel</button>
+      </div>
+    `;
+    els.pendingWebhooksList.appendChild(item);
+  }
+}
+
 function renderStats() {
   const watchers = state.watchers;
   const total = watchers.length;
@@ -170,6 +243,7 @@ function render() {
   els.summary.textContent = `${state.watchers.length} watcher${state.watchers.length === 1 ? '' : 's'} · ${running} enabled`;
 
   renderStats();
+  renderPendingWebhooks();
 
   for (const watcher of state.watchers) {
     const status = watcher.status || {};
@@ -182,7 +256,7 @@ function render() {
       <td>
         <div>${escapeHtml(watcher.username)}@${escapeHtml(watcher.host)}:${escapeHtml(watcher.port)}</div>
         <div class="subtle">${escapeHtml(watcher.remotePath)}</div>
-        <div class="subtle webhookUrl">${watcher.webhookToken ? `Trigger: ${escapeHtml(webhookUrl(watcher))}` : 'Trigger: restart app or reset webhook'}</div>
+        <div class="subtle webhookUrl">${watcher.webhookToken ? `GitHub hook: ${escapeHtml(webhookUrl(watcher))}` : 'GitHub hook: restart app or reset webhook'}</div>
       </td>
       <td>
         <div>${escapeHtml(watcher.discordEnabled ? 'Enabled' : 'Disabled')}</div>
@@ -191,6 +265,8 @@ function render() {
       <td>
         <div class="status ${statusClass(status.state)}"><span class="dot"></span>${escapeHtml(status.state || 'stopped')}</div>
         <div class="subtle">${escapeHtml(status.message || '')}</div>
+        <div class="subtle">${escapeHtml(formatJobSummary(watcher.jobSummary))}</div>
+        ${formatLatestJobError(watcher.jobSummary) ? `<div class="subtle errorText">${escapeHtml(formatLatestJobError(watcher.jobSummary))}</div>` : ''}
         <div class="subtle">${watcher.autoClearEnabled ? `Auto clear ${escapeHtml(watcher.autoClearLimit)} at ${escapeHtml(watcher.autoClearTime)}` : 'Auto clear off'}</div>
       </td>
       <td>
@@ -220,6 +296,12 @@ async function loadWatchers() {
   const data = await api('/api/watchers');
   state.watchers = data.watchers;
   render();
+}
+
+async function loadPendingWebhooks() {
+  const data = await api('/api/jobs/pending');
+  state.pendingJobs = data.jobs || [];
+  renderPendingWebhooks();
 }
 
 async function loadDiscordStatus() {
@@ -276,6 +358,10 @@ function openForm(watcher = null) {
   fields.password.value = '';
   fields.privateKey.value = '';
   fields.remotePath.value = watcher?.remotePath || '';
+  fields.serverDeployWebhookUrl.value = watcher?.serverDeployWebhookUrl || '';
+  fields.githubBranchFilter.value = watcher?.githubBranchFilter || '';
+  fields.deploymentTimeoutSeconds.value = watcher?.deploymentTimeoutSeconds || 1800;
+  fields.deployWebhookRetryCount.value = watcher?.deployWebhookRetryCount ?? 3;
   fields.discordChannel.value = watcher?.discordChannel || '';
   fields.discordEnabled.checked = Boolean(watcher?.discordEnabled);
   fields.pollIntervalSeconds.value = watcher?.pollIntervalSeconds || 5;
@@ -295,6 +381,10 @@ function formPayload() {
     port: Number(fields.port.value),
     username: fields.username.value.trim(),
     remotePath: fields.remotePath.value.trim(),
+    serverDeployWebhookUrl: fields.serverDeployWebhookUrl.value.trim(),
+    githubBranchFilter: fields.githubBranchFilter.value.trim(),
+    deploymentTimeoutSeconds: Number(fields.deploymentTimeoutSeconds.value),
+    deployWebhookRetryCount: Number(fields.deployWebhookRetryCount.value),
     discordChannel: fields.discordChannel.value.trim(),
     discordEnabled: fields.discordEnabled.checked,
     pollIntervalSeconds: Number(fields.pollIntervalSeconds.value),
@@ -393,6 +483,14 @@ async function handleAction(event) {
       return;
     }
 
+    if (action === 'cancel-job') {
+      const jobId = button.dataset.jobId;
+      if (!confirm(`Cancel queued webhook job #${jobId}?`)) return;
+      await api(`/api/watchers/${id}/jobs/${jobId}/cancel`, { method: 'POST' });
+      showToast('Webhook job cancelled.');
+      await loadPendingWebhooks();
+    }
+
     if (action === 'delete') {
       if (!confirm(`Delete watcher "${watcher.name}"?`)) return;
       await api(`/api/watchers/${id}`, { method: 'DELETE' });
@@ -426,13 +524,13 @@ async function handleAction(event) {
       }
       const url = webhookUrl(watcher);
       await navigator.clipboard.writeText(url);
-      showToast('Trigger webhook URL copied.');
+      showToast('GitHub webhook URL copied.');
     }
 
     if (action === 'reset-webhook') {
-      if (!confirm(`Reset trigger webhook URL for "${watcher.name}"? Old deploy scripts using it will stop working.`)) return;
+      if (!confirm(`Reset GitHub webhook URL for "${watcher.name}"? Existing GitHub webhook settings using it will stop working.`)) return;
       await api(`/api/watchers/${id}/reset-webhook`, { method: 'POST' });
-      showToast('Trigger webhook URL reset.');
+      showToast('GitHub webhook URL reset.');
     }
 
     if (action === 'clear-channel') {
@@ -450,6 +548,7 @@ async function handleAction(event) {
     }
 
     await loadWatchers();
+    await loadPendingWebhooks();
   } catch (error) {
     showToast(error.message);
   } finally {
@@ -501,9 +600,13 @@ async function init() {
   document.body.classList.remove('authPending');
 
   loadWatchers().catch((error) => showToast(error.message));
+  loadPendingWebhooks().catch((error) => showToast(error.message));
   loadDiscordStatus().catch((error) => showToast(error.message));
   loadReportBotStatus().catch((error) => showToast(error.message));
-  setInterval(() => loadWatchers().catch(() => {}), 5000);
+  setInterval(() => {
+    loadWatchers().catch(() => {});
+    loadPendingWebhooks().catch(() => {});
+  }, 5000);
   setInterval(() => loadDiscordStatus().catch(() => {}), 10000);
   setInterval(() => loadReportBotStatus().catch(() => {}), 10000);
 }

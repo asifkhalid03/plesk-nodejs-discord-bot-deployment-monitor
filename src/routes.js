@@ -47,6 +47,33 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     throw new Error('autoClearLimit must be a positive number or "all".');
   }
 
+  const serverDeployWebhookUrl = String(body.serverDeployWebhookUrl || '').trim();
+  if (serverDeployWebhookUrl) {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(serverDeployWebhookUrl);
+    } catch (error) {
+      throw new Error('serverDeployWebhookUrl must be a valid URL.');
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      throw new Error('serverDeployWebhookUrl must use http or https.');
+    }
+  }
+
+  const githubBranchFilter = String(body.githubBranchFilter || '')
+    .trim()
+    .replace(/^refs\/heads\//, '');
+
+  const deploymentTimeoutSeconds = Number(body.deploymentTimeoutSeconds || 1800);
+  if (!Number.isInteger(deploymentTimeoutSeconds) || deploymentTimeoutSeconds < 30) {
+    throw new Error('deploymentTimeoutSeconds must be at least 30.');
+  }
+
+  const deployWebhookRetryCount = Number(body.deployWebhookRetryCount ?? 3);
+  if (!Number.isInteger(deployWebhookRetryCount) || deployWebhookRetryCount < 0 || deployWebhookRetryCount > 10) {
+    throw new Error('deployWebhookRetryCount must be between 0 and 10.');
+  }
+
   return {
     name: String(body.name || '').trim(),
     protocol,
@@ -62,36 +89,120 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     enabled: Boolean(body.enabled),
     autoClearEnabled: autoClearEnabled && discordEnabled,
     autoClearTime,
-    autoClearLimit
+    autoClearLimit,
+    serverDeployWebhookUrl,
+    githubBranchFilter,
+    deploymentTimeoutSeconds,
+    deployWebhookRetryCount
+  };
+}
+
+function parseWebhookPayload(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const raw = String(req.body || '').trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const params = new URLSearchParams(raw);
+    const payload = params.get('payload');
+    if (!payload) throw new Error('Webhook payload must be JSON.');
+    return JSON.parse(payload);
+  }
+}
+
+function branchFromGitRef(ref) {
+  const value = String(ref || '').trim();
+  return value.startsWith('refs/heads/') ? value.slice('refs/heads/'.length) : value;
+}
+
+function commitInfoFromPayload(payload) {
+  const headCommit = payload?.head_commit || {};
+  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  const fallback = commits.length ? commits[commits.length - 1] : {};
+  return {
+    sha: headCommit.id || fallback.id || payload?.after || '',
+    message: headCommit.message || fallback.message || ''
   };
 }
 
 function registerRoutes(app, watcherManager, discordService, reportBotService) {
   const router = express.Router();
 
-  async function handleTriggerWebhook(req, res, next) {
+  async function decorateWatcher(watcher) {
+    return {
+      ...watcher,
+      status: watcherManager.getStatus(watcher.id),
+      jobSummary: await watcherManager.getJobSummary(watcher.id)
+    };
+  }
+
+  async function handleGithubWebhook(req, res, next) {
     try {
       const watcher = await db.getWatcherByWebhookToken(req.params.token);
       if (!watcher) return res.status(404).json({ error: 'Webhook not found.' });
 
-      const status = await watcherManager.triggerWebhook(watcher.id);
-      res.json({ ok: true, status });
+      const event = String(req.get('x-github-event') || '').toLowerCase();
+      if (event !== 'push') {
+        return res.status(202).json({
+          ok: true,
+          ignored: true,
+          reason: 'Only GitHub push events enqueue deployments.'
+        });
+      }
+
+      const payload = parseWebhookPayload(req);
+      const ref = String(payload.ref || '');
+      const branch = branchFromGitRef(ref);
+      const filter = watcher.githubBranchFilter || '';
+      if (filter && filter !== branch && filter !== ref) {
+        return res.status(202).json({
+          ok: true,
+          ignored: true,
+          reason: `Push ref ${ref || '(empty)'} does not match branch filter ${filter}.`
+        });
+      }
+
+      const commit = commitInfoFromPayload(payload);
+      const result = await watcherManager.enqueueDeployment(watcher.id, {
+        githubDeliveryId: req.get('x-github-delivery') || '',
+        githubEvent: event,
+        githubRef: ref,
+        githubBranch: branch,
+        commitSha: commit.sha,
+        commitMessage: commit.message
+      });
+      res.status(202).json({ ok: true, ...result });
     } catch (error) {
       next(error);
     }
   }
 
-  app.get('/hooks/:token', handleTriggerWebhook);
-  app.post('/hooks/:token', handleTriggerWebhook);
+  app.get('/hooks/:token', (req, res) => {
+    res.status(405).json({
+      ok: false,
+      error: 'Use POST with a GitHub push webhook payload to enqueue a deployment.'
+    });
+  });
+  app.post('/hooks/:token', handleGithubWebhook);
 
   router.get('/watchers', async (req, res, next) => {
     try {
       const watchers = await db.listWatchers();
       res.json({
-        watchers: watchers.map((watcher) => ({
-          ...watcher,
-          status: watcherManager.getStatus(watcher.id)
-        }))
+        watchers: await Promise.all(watchers.map((watcher) => decorateWatcher(watcher)))
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/jobs/pending', async (req, res, next) => {
+    try {
+      const jobs = await db.listPendingDeploymentJobs({ limit: req.query.limit });
+      res.json({
+        jobs,
+        count: jobs.length
       });
     } catch (error) {
       next(error);
@@ -105,7 +216,7 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
       const watcher = await db.createWatcher({ ...input, enabled: false });
       if (shouldStart) await watcherManager.start(watcher.id);
       const saved = await db.getWatcher(watcher.id);
-      res.status(201).json({ watcher: { ...saved, status: watcherManager.getStatus(saved.id) } });
+      res.status(201).json({ watcher: await decorateWatcher(saved) });
     } catch (error) {
       next(error);
     }
@@ -127,7 +238,7 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
         await watcherManager.stop(req.params.id);
       }
       const saved = await db.getWatcher(watcher.id);
-      res.json({ watcher: { ...saved, status: watcherManager.getStatus(saved.id) } });
+      res.json({ watcher: await decorateWatcher(saved) });
     } catch (error) {
       next(error);
     }
@@ -182,6 +293,32 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     }
   });
 
+  router.get('/watchers/:id/jobs', async (req, res, next) => {
+    try {
+      const watcher = await db.getWatcher(req.params.id);
+      if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      const jobs = await watcherManager.listJobs(req.params.id, { limit: req.query.limit });
+      res.json({
+        jobs,
+        summary: await watcherManager.getJobSummary(req.params.id)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/watchers/:id/jobs/:jobId/cancel', async (req, res, next) => {
+    try {
+      const job = await watcherManager.cancelJob(req.params.id, req.params.jobId);
+      res.json({
+        job,
+        summary: await watcherManager.getJobSummary(req.params.id)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/watchers/:id/test-discord', async (req, res, next) => {
     try {
       const watcher = await db.getWatcher(req.params.id);
@@ -218,7 +355,7 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     try {
       const watcher = await db.resetWebhookToken(req.params.id);
       if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
-      res.json({ watcher: { ...watcher, status: watcherManager.getStatus(watcher.id) } });
+      res.json({ watcher: await decorateWatcher(watcher) });
     } catch (error) {
       next(error);
     }

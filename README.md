@@ -13,6 +13,7 @@ A Node.js app with a small web UI for polling remote FTP/SFTP deployment logs. D
 - Encrypts stored passwords and private keys using AES-256-GCM.
 - Shows live watcher status in the web UI.
 - Includes test connection and test Discord message actions.
+- Accepts per-watcher GitHub push webhooks and runs queued deployments one at a time per watcher.
 - Optional Daily Reports Bot feature with web UI start/stop controls and slash commands for TXT/PDF reports.
 
 ## Optional Discord Setup
@@ -157,23 +158,22 @@ Discord bulk deletion only works for messages newer than 14 days. Older messages
 - The UI shows whether global Discord integration is configured and connected.
 - Each watcher has an `Enable Discord for this watcher` option. When it is off, the watcher still polls logs but skips Discord delivery, channel clearing, and Discord tests.
 
-## Trigger Webhooks
+## GitHub Deployment Webhooks
 
-Each watcher has its own trigger webhook URL in the table. Use `Copy trigger` and call it from your deploy script when deployment starts.
+Each watcher has its own GitHub webhook URL in the table. Use `Copy trigger` and add that URL to the GitHub repository webhook settings.
 
-The webhook does not send the posted text to Discord. It tells this app to start reading that watcher's remote `deploy.log` by FTP/SFTP every `WEBHOOK_TRIGGER_POLL_INTERVAL_SECONDS` seconds. The temporary watcher stops when it sees `DEPLOYMENT_BLOCK_END_TEXT`, for example `Deployment finished`.
+Configure GitHub to send `push` events. GitHub `ping` and other event types are accepted but ignored. The watcher token URL is the routing secret; HMAC signature verification is intentionally not required.
 
-When Discord is configured and enabled for the watcher, and the watcher has a Discord channel, a trigger webhook first clears recent messages from that channel using the watcher `Auto clear limit` value.
+For each watcher, set:
 
-```bash
-curl "http://localhost:3000/hooks/YOUR_TOKEN"
-```
+- `Server deploy webhook URL`: the server URL this app calls with `GET` to start deployment.
+- `GitHub branch filter`: optional branch name such as `main`. Blank means all branches.
+- `Deployment timeout seconds`: defaults to `1800`.
+- `Deploy webhook retry count`: defaults to `3`.
 
-For a public server, use your real app URL:
+When GitHub sends a matching push event, the job is stored in SQLite. Each watcher processes one queued deployment at a time; separate watchers can deploy in parallel. The app starts FTP/SFTP log monitoring before it calls the server deploy webhook, then marks the job complete when it sees `DEPLOYMENT_BLOCK_END_TEXT`, for example `Deployment finished`.
 
-```bash
-curl "https://your-domain.com/hooks/YOUR_TOKEN"
-```
+`GET /hooks/YOUR_TOKEN` no longer starts deployments. Use GitHub's `POST` webhook delivery.
 
 Keep webhook URLs secret. If one leaks, click `Reset webhook` for that watcher.
 
