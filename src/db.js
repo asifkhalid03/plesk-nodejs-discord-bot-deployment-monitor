@@ -37,6 +37,7 @@ async function initDb() {
       auto_clear_last_run_date TEXT,
       webhook_token TEXT UNIQUE,
       server_deploy_webhook_url TEXT NOT NULL DEFAULT '',
+      server_deploy_webhook_method TEXT NOT NULL DEFAULT 'POST',
       github_branch_filter TEXT NOT NULL DEFAULT '',
       deployment_timeout_seconds INTEGER NOT NULL DEFAULT 1800,
       deploy_webhook_retry_count INTEGER NOT NULL DEFAULT 3,
@@ -73,6 +74,7 @@ async function initDb() {
   await ensureColumn('watchers', 'auto_clear_last_run_date', 'TEXT');
   await ensureColumn('watchers', 'webhook_token', 'TEXT');
   await ensureColumn('watchers', 'server_deploy_webhook_url', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('watchers', 'server_deploy_webhook_method', "TEXT NOT NULL DEFAULT 'POST'");
   await ensureColumn('watchers', 'github_branch_filter', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('watchers', 'deployment_timeout_seconds', 'INTEGER NOT NULL DEFAULT 1800');
   await ensureColumn('watchers', 'deploy_webhook_retry_count', 'INTEGER NOT NULL DEFAULT 3');
@@ -125,6 +127,7 @@ function publicWatcher(row) {
     autoClearLastRunDate: row.auto_clear_last_run_date,
     webhookToken: row.webhook_token,
     serverDeployWebhookUrl: row.server_deploy_webhook_url,
+    serverDeployWebhookMethod: row.server_deploy_webhook_method || 'POST',
     githubBranchFilter: row.github_branch_filter,
     deploymentTimeoutSeconds: row.deployment_timeout_seconds,
     deployWebhookRetryCount: row.deploy_webhook_retry_count,
@@ -194,9 +197,9 @@ async function createWatcher(input) {
       name, protocol, host, port, username, password_encrypted, private_key_encrypted,
       remote_path, discord_channel, discord_enabled, poll_interval_seconds, enabled,
       auto_clear_enabled, auto_clear_time, auto_clear_limit, webhook_token,
-      server_deploy_webhook_url, github_branch_filter, deployment_timeout_seconds,
-      deploy_webhook_retry_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      server_deploy_webhook_url, server_deploy_webhook_method, github_branch_filter,
+      deployment_timeout_seconds, deploy_webhook_retry_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.name,
     input.protocol,
     input.host,
@@ -214,6 +217,7 @@ async function createWatcher(input) {
     input.autoClearLimit,
     createWebhookToken(),
     input.serverDeployWebhookUrl || '',
+    input.serverDeployWebhookMethod || 'POST',
     input.githubBranchFilter || '',
     input.deploymentTimeoutSeconds || 1800,
     input.deployWebhookRetryCount ?? 3
@@ -236,7 +240,7 @@ async function updateWatcher(id, input) {
       password_encrypted = ?, private_key_encrypted = ?, remote_path = ?,
       discord_channel = ?, discord_enabled = ?, poll_interval_seconds = ?, enabled = ?,
       auto_clear_enabled = ?, auto_clear_time = ?, auto_clear_limit = ?,
-      server_deploy_webhook_url = ?, github_branch_filter = ?,
+      server_deploy_webhook_url = ?, server_deploy_webhook_method = ?, github_branch_filter = ?,
       deployment_timeout_seconds = ?, deploy_webhook_retry_count = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
@@ -256,6 +260,7 @@ async function updateWatcher(id, input) {
     input.autoClearTime,
     input.autoClearLimit,
     input.serverDeployWebhookUrl || '',
+    input.serverDeployWebhookMethod || 'POST',
     input.githubBranchFilter || '',
     input.deploymentTimeoutSeconds || 1800,
     input.deployWebhookRetryCount ?? 3,

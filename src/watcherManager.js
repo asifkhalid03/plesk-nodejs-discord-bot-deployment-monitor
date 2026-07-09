@@ -795,7 +795,7 @@ class WatcherManager {
       });
 
       try {
-        await this.fetchDeployWebhook(watcher.serverDeployWebhookUrl);
+        await this.fetchDeployWebhook(watcher.serverDeployWebhookUrl, watcher.serverDeployWebhookMethod);
         this.setStatus(watcher.id, {
           state: 'running',
           message: `Server deploy webhook accepted job #${jobId}; waiting for finish marker`,
@@ -813,12 +813,12 @@ class WatcherManager {
     throw new Error(`Server deploy webhook failed after ${totalAttempts} attempt(s): ${lastError?.message || 'Unknown error'}`);
   }
 
-  async fetchDeployWebhook(url) {
+  async fetchDeployWebhook(url, method = 'POST') {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.remoteConnectTimeoutMs);
     try {
       const response = await fetch(url, {
-        method: 'GET',
+        method,
         redirect: 'follow',
         signal: controller.signal
       });

@@ -166,7 +166,8 @@ Configure GitHub to send `push` events. GitHub `ping` and other event types are 
 
 For each watcher, set:
 
-- `Server deploy webhook URL`: the server URL this app calls with `GET` to start deployment.
+- `Server deploy webhook URL`: the server URL this app calls to start deployment.
+- `Server deploy webhook method`: use `POST` for Plesk Git webhooks. `GET` is still available for simple custom endpoints.
 - `GitHub branch filter`: optional branch name such as `main`. Blank means all branches.
 - `Deployment timeout seconds`: defaults to `1800`.
 - `Deploy webhook retry count`: defaults to `3`.

@@ -64,6 +64,11 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     .trim()
     .replace(/^refs\/heads\//, '');
 
+  const serverDeployWebhookMethod = String(body.serverDeployWebhookMethod || 'POST').trim().toUpperCase();
+  if (!['GET', 'POST'].includes(serverDeployWebhookMethod)) {
+    throw new Error('serverDeployWebhookMethod must be GET or POST.');
+  }
+
   const deploymentTimeoutSeconds = Number(body.deploymentTimeoutSeconds || 1800);
   if (!Number.isInteger(deploymentTimeoutSeconds) || deploymentTimeoutSeconds < 30) {
     throw new Error('deploymentTimeoutSeconds must be at least 30.');
@@ -91,6 +96,7 @@ function validateWatcherPayload(body, { partial = false } = {}) {
     autoClearTime,
     autoClearLimit,
     serverDeployWebhookUrl,
+    serverDeployWebhookMethod,
     githubBranchFilter,
     deploymentTimeoutSeconds,
     deployWebhookRetryCount

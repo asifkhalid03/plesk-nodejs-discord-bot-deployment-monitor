@@ -50,6 +50,7 @@ const fields = {
   privateKey: document.querySelector('#privateKey'),
   remotePath: document.querySelector('#remotePath'),
   serverDeployWebhookUrl: document.querySelector('#serverDeployWebhookUrl'),
+  serverDeployWebhookMethod: document.querySelector('#serverDeployWebhookMethod'),
   githubBranchFilter: document.querySelector('#githubBranchFilter'),
   deploymentTimeoutSeconds: document.querySelector('#deploymentTimeoutSeconds'),
   deployWebhookRetryCount: document.querySelector('#deployWebhookRetryCount'),
@@ -359,6 +360,7 @@ function openForm(watcher = null) {
   fields.privateKey.value = '';
   fields.remotePath.value = watcher?.remotePath || '';
   fields.serverDeployWebhookUrl.value = watcher?.serverDeployWebhookUrl || '';
+  fields.serverDeployWebhookMethod.value = watcher?.serverDeployWebhookMethod || 'POST';
   fields.githubBranchFilter.value = watcher?.githubBranchFilter || '';
   fields.deploymentTimeoutSeconds.value = watcher?.deploymentTimeoutSeconds || 1800;
   fields.deployWebhookRetryCount.value = watcher?.deployWebhookRetryCount ?? 3;
@@ -382,6 +384,7 @@ function formPayload() {
     username: fields.username.value.trim(),
     remotePath: fields.remotePath.value.trim(),
     serverDeployWebhookUrl: fields.serverDeployWebhookUrl.value.trim(),
+    serverDeployWebhookMethod: fields.serverDeployWebhookMethod.value || 'POST',
     githubBranchFilter: fields.githubBranchFilter.value.trim(),
     deploymentTimeoutSeconds: Number(fields.deploymentTimeoutSeconds.value),
     deployWebhookRetryCount: Number(fields.deployWebhookRetryCount.value),
