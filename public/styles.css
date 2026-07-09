@@ -763,6 +763,11 @@ dialog::backdrop {
   word-break: break-word;
 }
 
+.commandOutput {
+  min-height: 130px;
+  max-height: 260px;
+}
+
 .dialogHead,
 .dialogActions {
   display: flex;

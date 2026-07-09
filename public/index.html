@@ -262,6 +262,45 @@
       </form>
     </dialog>
 
+    <dialog id="commandDialog" class="logDialog">
+      <div class="logPanel">
+        <div class="dialogHead">
+          <div>
+            <h2 id="commandDialogTitle">Deployment command</h2>
+            <p class="subtle">Generate a copy-ready command that rewrites the deployment log on each run.</p>
+          </div>
+          <button type="button" id="closeCommandDialogBtn" class="iconBtn" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        <div class="grid">
+          <label>
+            Node bin directory
+            <input id="commandNodeBin" placeholder="/opt/plesk/node/25/bin" />
+          </label>
+
+          <label>
+            Log file path
+            <input id="commandLogPath" placeholder="deployment/deploy.log" />
+          </label>
+
+          <label class="wide">
+            Deployment steps
+            <textarea id="commandSteps" rows="6" spellcheck="false"></textarea>
+          </label>
+        </div>
+
+        <pre id="commandOutput" class="liveLogBlock commandOutput"><code></code></pre>
+
+        <div class="dialogActions">
+          <button type="button" id="copyCommandBtn" class="primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy command
+          </button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="logDialog" class="logDialog">
       <div class="logPanel">
         <div class="dialogHead">

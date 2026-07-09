@@ -31,6 +31,14 @@ const els = {
   logDialogSummary: document.querySelector('#logDialogSummary'),
   closeLogDialogBtn: document.querySelector('#closeLogDialogBtn'),
   liveLogBlock: document.querySelector('#liveLogBlock'),
+  commandDialog: document.querySelector('#commandDialog'),
+  commandDialogTitle: document.querySelector('#commandDialogTitle'),
+  closeCommandDialogBtn: document.querySelector('#closeCommandDialogBtn'),
+  commandNodeBin: document.querySelector('#commandNodeBin'),
+  commandLogPath: document.querySelector('#commandLogPath'),
+  commandSteps: document.querySelector('#commandSteps'),
+  commandOutput: document.querySelector('#commandOutput'),
+  copyCommandBtn: document.querySelector('#copyCommandBtn'),
   formError: document.querySelector('#formError'),
   toast: document.querySelector('#toast'),
   statTotal: document.querySelector('#statTotal'),
@@ -69,6 +77,7 @@ const icons = {
   eye: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
   edit: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
   connection: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  terminal: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
   discord: '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.79 19.79 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.618-1.25.077.077 0 00-.079-.037A19.74 19.74 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.11 13.11 0 01-1.872-.892.077.077 0 01-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 01.078-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.009c.12.099.246.198.373.292a.077.077 0 01-.006.127 12.3 12.3 0 01-1.873.892.076.076 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.84 19.84 0 006.002-3.03.077.077 0 00.031-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.028z"/></svg>',
   copy: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   refresh: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
@@ -278,6 +287,7 @@ function render() {
           <button data-action="start" data-id="${watcher.id}">${icon('play')}Start</button>
           <button data-action="stop" data-id="${watcher.id}">${icon('stop')}Stop</button>
           <button data-action="view-log" data-id="${watcher.id}">${icon('eye')}View log</button>
+          <button data-action="deploy-command" data-id="${watcher.id}">${icon('terminal')}Deploy cmd</button>
           <button data-action="edit" data-id="${watcher.id}">${icon('edit')}Edit</button>
           <button data-action="test-connection" data-id="${watcher.id}">${icon('connection')}Test FTP/SFTP</button>
           <button data-action="test-discord" data-id="${watcher.id}" ${watcher.discordEnabled ? '' : 'disabled'}>${icon('discord')}Test Discord</button>
@@ -404,18 +414,55 @@ function formatLogLines(lines) {
   return lines.map((entry) => entry.line).join('\n');
 }
 
+function dirname(pathValue) {
+  const normalized = String(pathValue || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const index = normalized.lastIndexOf('/');
+  if (index <= 0) return index === 0 ? '/' : '';
+  return normalized.slice(0, index);
+}
+
+function commandStepList(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function defaultCommandLogPath(watcher) {
+  const remotePath = String(watcher?.remotePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!remotePath || remotePath === 'deploy.log') return 'deployment/deploy.log';
+  return remotePath;
+}
+
+function buildDeploymentCommand() {
+  const nodeBin = els.commandNodeBin.value.trim() || '/opt/plesk/node/25/bin';
+  const logPath = els.commandLogPath.value.trim() || 'deployment/deploy.log';
+  const logDir = dirname(logPath);
+  const steps = commandStepList(els.commandSteps.value);
+  return [
+    `export PATH=${nodeBin}:$PATH`,
+    logDir ? `mkdir -p ${logDir}` : '',
+    `{ echo "Deployment started: $(date)"; ${steps.join('; ')}; echo "Deployment finished: $(date)"; } 2>&1 | tee ${logPath}`
+  ].filter(Boolean).join('; ');
+}
+
+function updateDeploymentCommand() {
+  els.commandOutput.textContent = buildDeploymentCommand();
+}
+
+function openDeploymentCommand(watcher) {
+  const name = watcher?.name || `Watcher ${watcher?.id || ''}`.trim();
+  els.commandDialogTitle.textContent = `${name} deployment command`;
+  els.commandNodeBin.value = '/opt/plesk/node/25/bin';
+  els.commandLogPath.value = defaultCommandLogPath(watcher);
+  els.commandSteps.value = 'node -v\nnpm --version\nsleep 5';
+  updateDeploymentCommand();
+  els.commandDialog.showModal();
+}
+
 async function loadLiveLog() {
   if (!state.activeLogWatcherId) return;
-  let data;
-  try {
-    data = await api(`/api/watchers/${state.activeLogWatcherId}/logs?remote=1`);
-  } catch (error) {
-    if (error.message === 'Login required.') throw error;
-    data = {
-      lines: [{ line: `Unable to read remote log: ${error.message}` }],
-      status: { state: 'error' }
-    };
-  }
+  const data = await api(`/api/watchers/${state.activeLogWatcherId}/logs`);
   const watcher = state.watchers.find((item) => String(item.id) === String(state.activeLogWatcherId));
   const wasAtBottom =
     els.liveLogBlock.scrollTop + els.liveLogBlock.clientHeight >= els.liveLogBlock.scrollHeight - 24;
@@ -423,10 +470,7 @@ async function loadLiveLog() {
   els.liveLogBlock.textContent = formatLogLines(data.lines || []);
   const count = data.lines?.length || 0;
   const stateName = data.status?.state || watcher?.status?.state || 'stopped';
-  const remoteText = data.remote
-    ? ` - ${data.remote.resolvedPath} - ${data.remote.size} bytes`
-    : '';
-  els.logDialogSummary.textContent = `${count} line${count === 1 ? '' : 's'} - ${stateName}${remoteText}${data.truncated ? ' - tail view' : ''}`;
+  els.logDialogSummary.textContent = `${count} captured line${count === 1 ? '' : 's'} - ${stateName}${data.truncated ? ` - showing latest ${data.maxLines}` : ''}`;
 
   if (wasAtBottom) {
     els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
@@ -492,6 +536,11 @@ async function handleAction(event) {
 
     if (action === 'view-log') {
       await openLiveLog(watcher || { id });
+      return;
+    }
+
+    if (action === 'deploy-command') {
+      openDeploymentCommand(watcher || { id });
       return;
     }
 
@@ -598,6 +647,14 @@ els.reportBotStopBtn.addEventListener('click', async () => {
 els.closeDialogBtn.addEventListener('click', () => els.dialog.close());
 els.cancelBtn.addEventListener('click', () => els.dialog.close());
 els.closeLogDialogBtn.addEventListener('click', closeLiveLog);
+els.closeCommandDialogBtn.addEventListener('click', () => els.commandDialog.close());
+els.commandNodeBin.addEventListener('input', updateDeploymentCommand);
+els.commandLogPath.addEventListener('input', updateDeploymentCommand);
+els.commandSteps.addEventListener('input', updateDeploymentCommand);
+els.copyCommandBtn.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(buildDeploymentCommand());
+  showToast('Deployment command copied.');
+});
 els.logDialog.addEventListener('close', () => {
   clearInterval(state.logPollTimer);
   state.logPollTimer = null;
