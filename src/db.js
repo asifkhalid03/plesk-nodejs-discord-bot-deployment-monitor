@@ -55,6 +55,9 @@ async function initDb() {
       github_branch TEXT,
       commit_sha TEXT,
       commit_message TEXT,
+      webhook_method TEXT NOT NULL DEFAULT 'POST',
+      webhook_content_type TEXT NOT NULL DEFAULT 'application/json',
+      webhook_body TEXT NOT NULL DEFAULT '',
       attempts INTEGER NOT NULL DEFAULT 0,
       error_message TEXT NOT NULL DEFAULT '',
       log_start_offset INTEGER,
@@ -78,6 +81,9 @@ async function initDb() {
   await ensureColumn('watchers', 'github_branch_filter', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('watchers', 'deployment_timeout_seconds', 'INTEGER NOT NULL DEFAULT 1800');
   await ensureColumn('watchers', 'deploy_webhook_retry_count', 'INTEGER NOT NULL DEFAULT 3');
+  await ensureColumn('deployment_jobs', 'webhook_method', "TEXT NOT NULL DEFAULT 'POST'");
+  await ensureColumn('deployment_jobs', 'webhook_content_type', "TEXT NOT NULL DEFAULT 'application/json'");
+  await ensureColumn('deployment_jobs', 'webhook_body', "TEXT NOT NULL DEFAULT ''");
   await db.run('UPDATE watchers SET discord_enabled = 1 WHERE discord_enabled = 0 AND discord_channel != ""');
   await backfillWebhookTokens();
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_watchers_webhook_token ON watchers(webhook_token)');
@@ -148,6 +154,9 @@ function publicDeploymentJob(row) {
     githubBranch: row.github_branch,
     commitSha: row.commit_sha,
     commitMessage: row.commit_message,
+    webhookMethod: row.webhook_method || 'POST',
+    webhookContentType: row.webhook_content_type || 'application/json',
+    webhookBody: row.webhook_body || '',
     attempts: row.attempts,
     errorMessage: row.error_message,
     logStartOffset: row.log_start_offset,
@@ -316,8 +325,9 @@ async function createDeploymentJob(input) {
   const result = await db.run(
     `INSERT INTO deployment_jobs (
       watcher_id, status, github_delivery_id, github_event, github_ref, github_branch,
-      commit_sha, commit_message, log_start_offset
-    ) VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+      commit_sha, commit_message, webhook_method, webhook_content_type, webhook_body,
+      log_start_offset
+    ) VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.watcherId,
     input.githubDeliveryId || '',
     input.githubEvent || 'push',
@@ -325,6 +335,9 @@ async function createDeploymentJob(input) {
     input.githubBranch || '',
     input.commitSha || '',
     input.commitMessage || '',
+    input.webhookMethod || 'POST',
+    input.webhookContentType || 'application/json',
+    input.webhookBody || '',
     input.logStartOffset ?? null
   );
   return getDeploymentJob(result.lastID);

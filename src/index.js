@@ -12,8 +12,12 @@ async function main() {
   await db.initDb();
 
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
-  app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], limit: '1mb' }));
+  function captureRawBody(req, res, buffer) {
+    if (buffer?.length) req.rawBody = buffer.toString('utf8');
+  }
+
+  app.use(express.json({ limit: '1mb', verify: captureRawBody }));
+  app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], limit: '1mb', verify: captureRawBody }));
   registerAuth(app);
   app.use(express.static(path.join(__dirname, '..', 'public'), {
     etag: false,

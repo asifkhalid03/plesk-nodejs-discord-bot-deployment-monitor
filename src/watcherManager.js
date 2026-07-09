@@ -738,7 +738,7 @@ class WatcherManager {
       await runtime.pollOnce();
       runtime.schedule(runtime.getPollIntervalSeconds() * 1000);
 
-      await this.callServerDeployWebhook(watcher, job.id);
+      await this.callServerDeployWebhook(watcher, activeJob);
 
       const timeoutMs = Math.max(Number(watcher.deploymentTimeoutSeconds) || 1800, 1) * 1000;
       const timeoutPromise = new Promise((resolve, reject) => {
@@ -781,7 +781,8 @@ class WatcherManager {
     }
   }
 
-  async callServerDeployWebhook(watcher, jobId) {
+  async callServerDeployWebhook(watcher, job) {
+    const jobId = job.id;
     const retryCount = Math.max(0, Number(watcher.deployWebhookRetryCount) || 0);
     const totalAttempts = retryCount + 1;
     let lastError = null;
@@ -795,7 +796,7 @@ class WatcherManager {
       });
 
       try {
-        await this.fetchDeployWebhook(watcher.serverDeployWebhookUrl, watcher.serverDeployWebhookMethod);
+        await this.fetchDeployWebhook(watcher.serverDeployWebhookUrl, job);
         this.setStatus(watcher.id, {
           state: 'running',
           message: `Server deploy webhook accepted job #${jobId}; waiting for finish marker`,
@@ -813,12 +814,23 @@ class WatcherManager {
     throw new Error(`Server deploy webhook failed after ${totalAttempts} attempt(s): ${lastError?.message || 'Unknown error'}`);
   }
 
-  async fetchDeployWebhook(url, method = 'POST') {
+  async fetchDeployWebhook(url, job) {
+    const method = job.webhookMethod || 'POST';
+    const body = method === 'GET' || method === 'HEAD' ? undefined : job.webhookBody || '';
+    const headers = {};
+    if (body !== undefined) {
+      headers['Content-Type'] = job.webhookContentType || 'application/json';
+    }
+    if (job.githubEvent) headers['X-GitHub-Event'] = job.githubEvent;
+    if (job.githubDeliveryId) headers['X-GitHub-Delivery'] = job.githubDeliveryId;
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.remoteConnectTimeoutMs);
     try {
       const response = await fetch(url, {
         method,
+        headers,
+        body,
         redirect: 'follow',
         signal: controller.signal
       });

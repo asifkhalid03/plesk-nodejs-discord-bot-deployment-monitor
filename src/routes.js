@@ -132,6 +132,12 @@ function commitInfoFromPayload(payload) {
   };
 }
 
+function rawWebhookBody(req, payload) {
+  if (typeof req.rawBody === 'string') return req.rawBody;
+  if (typeof req.body === 'string') return req.body;
+  return JSON.stringify(payload || {});
+}
+
 function registerRoutes(app, watcherManager, discordService, reportBotService) {
   const router = express.Router();
 
@@ -176,7 +182,10 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
         githubRef: ref,
         githubBranch: branch,
         commitSha: commit.sha,
-        commitMessage: commit.message
+        commitMessage: commit.message,
+        webhookMethod: req.method,
+        webhookContentType: req.get('content-type') || 'application/json',
+        webhookBody: rawWebhookBody(req, payload)
       });
       res.status(202).json({ ok: true, ...result });
     } catch (error) {
