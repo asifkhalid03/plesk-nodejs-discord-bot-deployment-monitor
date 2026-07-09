@@ -406,7 +406,16 @@ function formatLogLines(lines) {
 
 async function loadLiveLog() {
   if (!state.activeLogWatcherId) return;
-  const data = await api(`/api/watchers/${state.activeLogWatcherId}/logs`);
+  let data;
+  try {
+    data = await api(`/api/watchers/${state.activeLogWatcherId}/logs?remote=1`);
+  } catch (error) {
+    if (error.message === 'Login required.') throw error;
+    data = {
+      lines: [{ line: `Unable to read remote log: ${error.message}` }],
+      status: { state: 'error' }
+    };
+  }
   const watcher = state.watchers.find((item) => String(item.id) === String(state.activeLogWatcherId));
   const wasAtBottom =
     els.liveLogBlock.scrollTop + els.liveLogBlock.clientHeight >= els.liveLogBlock.scrollHeight - 24;
@@ -414,7 +423,10 @@ async function loadLiveLog() {
   els.liveLogBlock.textContent = formatLogLines(data.lines || []);
   const count = data.lines?.length || 0;
   const stateName = data.status?.state || watcher?.status?.state || 'stopped';
-  els.logDialogSummary.textContent = `${count} captured line${count === 1 ? '' : 's'} · ${stateName}${data.truncated ? ` · showing latest ${data.maxLines}` : ''}`;
+  const remoteText = data.remote
+    ? ` - ${data.remote.resolvedPath} - ${data.remote.size} bytes`
+    : '';
+  els.logDialogSummary.textContent = `${count} line${count === 1 ? '' : 's'} - ${stateName}${remoteText}${data.truncated ? ' - tail view' : ''}`;
 
   if (wasAtBottom) {
     els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
@@ -430,7 +442,7 @@ function closeLiveLog() {
 
 async function openLiveLog(watcher) {
   state.activeLogWatcherId = watcher.id;
-  els.logDialogTitle.textContent = `${watcher.name} live log`;
+  els.logDialogTitle.textContent = `${watcher.name || `Watcher ${watcher.id}`} live log`;
   els.logDialogSummary.textContent = 'Loading log lines...';
   els.liveLogBlock.textContent = 'Loading...';
   els.logDialog.showModal();
@@ -479,7 +491,7 @@ async function handleAction(event) {
     }
 
     if (action === 'view-log') {
-      await openLiveLog(watcher);
+      await openLiveLog(watcher || { id });
       return;
     }
 

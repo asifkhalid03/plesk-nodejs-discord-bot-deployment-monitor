@@ -302,6 +302,10 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     try {
       const watcher = await db.getWatcher(req.params.id);
       if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      if (req.query.remote === '1') {
+        res.json(await watcherManager.getRemoteLogTail(req.params.id, { maxBytes: req.query.maxBytes }));
+        return;
+      }
       res.json(watcherManager.getLogs(req.params.id));
     } catch (error) {
       next(error);

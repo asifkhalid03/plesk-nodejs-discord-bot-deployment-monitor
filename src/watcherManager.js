@@ -556,6 +556,54 @@ class WatcherManager {
     };
   }
 
+  async getRemoteLogTail(id, { maxBytes = 200000 } = {}) {
+    const numericId = Number(id);
+    const watcher = await db.getWatcher(numericId, { includeSecrets: true });
+    if (!watcher) throw new Error('Watcher not found.');
+
+    const safeMaxBytes = Math.min(Math.max(Number(maxBytes) || 200000, 4096), 1000000);
+    const client = createRemoteClient(watcher);
+    try {
+      await client.connect();
+      const resolvedPath = await resolveRemotePath(client, watcher.remotePath);
+      const stat = await client.stat(resolvedPath);
+      const startOffset = Math.max(0, stat.size - safeMaxBytes);
+      const chunk = await client.readRange(resolvedPath, startOffset, stat.size - 1);
+      let text = chunk.toString('utf8');
+
+      if (startOffset > 0) {
+        text = text.replace(/^[^\r\n]*(?:\r?\n|$)/, '');
+      }
+
+      const rawLines = text.length ? text.split(/\r?\n/) : [];
+      if (rawLines.length && rawLines[rawLines.length - 1] === '') rawLines.pop();
+      const now = new Date().toISOString();
+      const lines = rawLines.map((line) => ({
+        at: now,
+        jobId: this.activeJobs.get(numericId)?.id || null,
+        source: 'remote',
+        line
+      }));
+
+      return {
+        watcherId: numericId,
+        lines,
+        maxLines: lines.length,
+        truncated: startOffset > 0,
+        status: this.getStatus(numericId),
+        currentJob: this.activeJobs.get(numericId) || null,
+        remote: {
+          resolvedPath,
+          size: stat.size,
+          startOffset,
+          tailBytes: safeMaxBytes
+        }
+      };
+    } finally {
+      await client.close();
+    }
+  }
+
   async start(id) {
     await this.stop(id, { persist: false });
     this.clearLogs(id);
