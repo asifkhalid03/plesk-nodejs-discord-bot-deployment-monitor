@@ -637,6 +637,11 @@ tbody tr:last-child td {
   min-width: 96px;
 }
 
+#addGroupBtn {
+  min-width: 104px;
+  white-space: nowrap;
+}
+
 .groupList {
   display: flex;
   flex-wrap: wrap;
