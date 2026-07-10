@@ -823,6 +823,23 @@ dialog::backdrop {
   max-height: 260px;
 }
 
+.commandChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.commandChips button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: rgba(139, 92, 246, 0.28);
+  color: var(--brand-light);
+  background: rgba(99, 102, 241, 0.12);
+  font-family: 'JetBrains Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
 .dialogHead,
 .dialogActions {
   display: flex;
@@ -849,6 +866,10 @@ dialog::backdrop {
   margin-top: 24px;
   padding-top: 18px;
   border-top: 1px solid var(--border);
+}
+
+.commandDialogActions {
+  justify-content: flex-end;
 }
 
 /* ===== Form Grid ===== */

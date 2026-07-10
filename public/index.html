@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260710-hard-stop" />
+    <link rel="stylesheet" href="/styles.css?v=20260710-worker-command" />
   </head>
   <body class="authPending">
     <header class="topbar">
@@ -305,6 +305,14 @@
           <div>
             <h2 id="commandDialogTitle">Deployment command</h2>
             <p class="subtle">Generate a copy-ready command that rewrites the deployment log on each run.</p>
+            <div id="commandStepChips" class="commandChips" aria-label="Quick deployment steps">
+              <button type="button" data-command-step="node -v">node -v</button>
+              <button type="button" data-command-step="npm --version">npm --version</button>
+              <button type="button" data-command-step="npm install">npm install</button>
+              <button type="button" data-command-step="npm run build">npm run build</button>
+              <button type="button" data-command-step="mkdir -p tmp">mkdir -p tmp</button>
+              <button type="button" data-command-step="touch tmp/restart.txt">touch tmp/restart.txt</button>
+            </div>
           </div>
           <button type="button" id="closeCommandDialogBtn" class="iconBtn" aria-label="Close">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -330,7 +338,10 @@
 
         <pre id="commandOutput" class="liveLogBlock commandOutput"><code></code></pre>
 
-        <div class="dialogActions">
+        <div class="dialogActions commandDialogActions">
+          <button type="button" id="saveCommandBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save command
+          </button>
           <button type="button" id="copyCommandBtn" class="primary">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy command
           </button>
@@ -411,6 +422,6 @@
     </dialog>
 
     <div id="toast" class="toast hidden"></div>
-    <script src="/app.js?v=20260710-hard-stop" data-cfasync="false"></script>
+    <script src="/app.js?v=20260710-worker-command" data-cfasync="false"></script>
   </body>
 </html>

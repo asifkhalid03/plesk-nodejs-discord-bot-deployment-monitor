@@ -77,6 +77,16 @@ async function initDb() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(watcher_id) REFERENCES watchers(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS watcher_deployment_commands (
+      watcher_id INTEGER PRIMARY KEY,
+      node_bin TEXT NOT NULL DEFAULT '',
+      log_path TEXT NOT NULL DEFAULT '',
+      steps TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(watcher_id) REFERENCES watchers(id) ON DELETE CASCADE
+    );
   `);
   await ensureColumn('watchers', 'last_remote_path', 'TEXT');
   await ensureColumn('watchers', 'discord_enabled', 'INTEGER NOT NULL DEFAULT 0');
@@ -218,6 +228,18 @@ function publicDeploymentJob(row) {
     job.groupName = row.group_name || 'Default';
   }
   return job;
+}
+
+function publicWatcherDeploymentCommand(row) {
+  if (!row) return null;
+  return {
+    watcherId: row.watcher_id,
+    nodeBin: row.node_bin,
+    logPath: row.log_path,
+    steps: row.steps,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
 }
 
 function runtimeWatcher(row) {
@@ -638,6 +660,36 @@ async function getDeploymentJobSummary(watcherId) {
   };
 }
 
+async function getWatcherDeploymentCommand(watcherId) {
+  const row = await db.get(
+    'SELECT * FROM watcher_deployment_commands WHERE watcher_id = ?',
+    watcherId
+  );
+  return publicWatcherDeploymentCommand(row);
+}
+
+async function saveWatcherDeploymentCommand(watcherId, input) {
+  const nodeBin = String(input.nodeBin || '').trim();
+  const logPath = String(input.logPath || '').trim();
+  const steps = String(input.steps || '');
+
+  await db.run(
+    `INSERT INTO watcher_deployment_commands (watcher_id, node_bin, log_path, steps)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(watcher_id) DO UPDATE SET
+       node_bin = excluded.node_bin,
+       log_path = excluded.log_path,
+       steps = excluded.steps,
+       updated_at = CURRENT_TIMESTAMP`,
+    watcherId,
+    nodeBin,
+    logPath,
+    steps
+  );
+
+  return getWatcherDeploymentCommand(watcherId);
+}
+
 module.exports = {
   initDb,
   listWatcherGroups,
@@ -668,5 +720,7 @@ module.exports = {
   markDeploymentJobFailed,
   markDeploymentJobCancelled,
   failStaleRunningDeploymentJobs,
-  getDeploymentJobSummary
+  getDeploymentJobSummary,
+  getWatcherDeploymentCommand,
+  saveWatcherDeploymentCommand
 };

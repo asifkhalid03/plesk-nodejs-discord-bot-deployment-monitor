@@ -374,6 +374,31 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     }
   });
 
+  router.get('/watchers/:id/deployment-command', async (req, res, next) => {
+    try {
+      const watcher = await db.getWatcher(req.params.id);
+      if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      res.json({ command: await db.getWatcherDeploymentCommand(req.params.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/watchers/:id/deployment-command', async (req, res, next) => {
+    try {
+      const watcher = await db.getWatcher(req.params.id);
+      if (!watcher) return res.status(404).json({ error: 'Watcher not found.' });
+      const command = await db.saveWatcherDeploymentCommand(req.params.id, {
+        nodeBin: req.body?.nodeBin,
+        logPath: req.body?.logPath,
+        steps: req.body?.steps
+      });
+      res.json({ command });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/watchers/:id/logs', async (req, res, next) => {
     try {
       const watcher = await db.getWatcher(req.params.id);

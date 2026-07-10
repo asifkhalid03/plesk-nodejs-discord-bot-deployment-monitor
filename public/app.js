@@ -5,6 +5,7 @@ const state = {
   discordStatus: null,
   activeLogWatcherId: null,
   activeLogRemoteLoaded: false,
+  activeCommandWatcherId: null,
   logPollTimer: null
 };
 
@@ -50,6 +51,8 @@ const els = {
   commandLogPath: document.querySelector('#commandLogPath'),
   commandSteps: document.querySelector('#commandSteps'),
   commandOutput: document.querySelector('#commandOutput'),
+  commandStepChips: document.querySelector('#commandStepChips'),
+  saveCommandBtn: document.querySelector('#saveCommandBtn'),
   copyCommandBtn: document.querySelector('#copyCommandBtn'),
   integrationsDialog: document.querySelector('#integrationsDialog'),
   integrationsForm: document.querySelector('#integrationsForm'),
@@ -583,6 +586,28 @@ function commandStepList(value) {
     .filter(Boolean);
 }
 
+function commandSettingPayload() {
+  return {
+    nodeBin: els.commandNodeBin.value.trim(),
+    logPath: els.commandLogPath.value.trim(),
+    steps: els.commandSteps.value
+  };
+}
+
+function applyCommandSetting(command, watcher) {
+  els.commandNodeBin.value = command?.nodeBin || '/opt/plesk/node/25/bin';
+  els.commandLogPath.value = command?.logPath || defaultCommandLogPath(watcher);
+  els.commandSteps.value = command?.steps || 'node -v\nnpm --version\nsleep 5';
+  updateDeploymentCommand();
+}
+
+function appendCommandStep(step) {
+  const current = els.commandSteps.value.replace(/\s+$/, '');
+  els.commandSteps.value = current ? `${current}\n${step}` : step;
+  els.commandSteps.focus();
+  updateDeploymentCommand();
+}
+
 function defaultCommandLogPath(watcher) {
   const remotePath = String(watcher?.remotePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!remotePath || remotePath === 'deploy.log') return 'deployment/deploy.log';
@@ -605,14 +630,20 @@ function updateDeploymentCommand() {
   els.commandOutput.textContent = buildDeploymentCommand();
 }
 
-function openDeploymentCommand(watcher) {
+async function openDeploymentCommand(watcher) {
   const name = watcher?.name || `Watcher ${watcher?.id || ''}`.trim();
+  state.activeCommandWatcherId = watcher?.id || null;
   els.commandDialogTitle.textContent = `${name} deployment command`;
-  els.commandNodeBin.value = '/opt/plesk/node/25/bin';
-  els.commandLogPath.value = defaultCommandLogPath(watcher);
-  els.commandSteps.value = 'node -v\nnpm --version\nsleep 5';
+  applyCommandSetting(null, watcher);
   updateDeploymentCommand();
   els.commandDialog.showModal();
+  if (!state.activeCommandWatcherId) return;
+  try {
+    const data = await api(`/api/watchers/${state.activeCommandWatcherId}/deployment-command`);
+    if (data.command) applyCommandSetting(data.command, watcher);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 async function loadLiveLog() {
@@ -792,7 +823,7 @@ async function handleAction(event) {
     }
 
     if (action === 'deploy-command') {
-      openDeploymentCommand(watcher || { id });
+      await openDeploymentCommand(watcher || { id });
       return;
     }
 
@@ -951,12 +982,35 @@ integrationFields.clearDiscordBotToken.addEventListener('change', () => {
   integrationFields.discordBotToken.disabled = integrationFields.clearDiscordBotToken.checked;
   if (integrationFields.clearDiscordBotToken.checked) integrationFields.discordBotToken.value = '';
 });
+els.commandStepChips.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-command-step]');
+  if (!button) return;
+  appendCommandStep(button.dataset.commandStep);
+});
+els.saveCommandBtn.addEventListener('click', async () => {
+  if (!state.activeCommandWatcherId) {
+    showToast('Open a watcher command first.');
+    return;
+  }
+  try {
+    await api(`/api/watchers/${state.activeCommandWatcherId}/deployment-command`, {
+      method: 'PUT',
+      body: JSON.stringify(commandSettingPayload())
+    });
+    showToast('Deployment command saved for this worker.');
+  } catch (error) {
+    showToast(error.message);
+  }
+});
 els.commandNodeBin.addEventListener('input', updateDeploymentCommand);
 els.commandLogPath.addEventListener('input', updateDeploymentCommand);
 els.commandSteps.addEventListener('input', updateDeploymentCommand);
 els.copyCommandBtn.addEventListener('click', async () => {
   await navigator.clipboard.writeText(buildDeploymentCommand());
   showToast('Deployment command copied.');
+});
+els.commandDialog.addEventListener('close', () => {
+  state.activeCommandWatcherId = null;
 });
 els.logDialog.addEventListener('close', () => {
   clearInterval(state.logPollTimer);
