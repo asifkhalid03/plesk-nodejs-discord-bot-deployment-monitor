@@ -49,6 +49,7 @@ class DiscordService {
     this.lastErrorAt = null;
     this.nextRetryAt = null;
     this.stopRequested = false;
+    this.lifecycleId = 0;
   }
 
   isConfigured() {
@@ -63,6 +64,7 @@ class DiscordService {
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
       nextRetryAt: this.nextRetryAt,
+      manualStopped: Boolean(config.discordManualStopped || this.stopRequested),
       userTag: this.client?.user?.tag || null
     };
   }
@@ -75,7 +77,11 @@ class DiscordService {
 
   async start() {
     this.ensureConfigured();
+    if (config.discordManualStopped) {
+      throw new Error('Discord is manually stopped. Click Connect to start it again.');
+    }
     this.stopRequested = false;
+    const lifecycleId = ++this.lifecycleId;
 
     if (this.client) {
       await destroyClient(this.client);
@@ -83,47 +89,55 @@ class DiscordService {
     }
 
     this.ready = false;
-    this.client = new Client({
+    const client = new Client({
       intents: [
         resolveIntent('Guilds'),
         resolveIntent('GuildMessages'),
         resolveIntent('MessageContent')
       ].filter(Boolean)
     });
+    this.client = client;
 
     let handledReady = false;
     const handleReady = () => {
       if (handledReady) return;
       handledReady = true;
+      if (this.stopRequested || lifecycleId !== this.lifecycleId || this.client !== client) {
+        destroyClient(client).catch(() => {});
+        return;
+      }
       this.ready = true;
       this.lastError = '';
       this.lastErrorAt = null;
       this.nextRetryAt = null;
       this.retryDelayMs = 5000;
-      console.log(`Discord bot logged in as ${this.client.user.tag}`);
-      this.readyWaiters.splice(0).forEach((resolve) => resolve(this.client));
+      console.log(`Discord bot logged in as ${client.user.tag}`);
+      this.readyWaiters.splice(0).forEach((resolve) => resolve(client));
     };
-    this.client.once('clientReady', handleReady);
-    this.client.once('ready', handleReady);
+    client.once('clientReady', handleReady);
+    client.once('ready', handleReady);
 
-    this.client.on('error', (error) => {
+    client.on('error', (error) => {
       this.lastError = error.message || String(error);
       this.lastErrorAt = new Date().toISOString();
       console.error('Discord client error:', error.message);
     });
 
-    this.client.on('shardDisconnect', () => {
+    client.on('shardDisconnect', () => {
       this.ready = false;
       if (this.stopRequested) return;
       this.lastError = 'Discord shard disconnected.';
       this.lastErrorAt = new Date().toISOString();
     });
 
-    await this.client.login(config.discordBotToken);
+    await client.login(config.discordBotToken);
+    if (this.stopRequested || lifecycleId !== this.lifecycleId || this.client !== client) {
+      await destroyClient(client);
+    }
   }
 
   startInBackground() {
-    if (!this.isConfigured()) {
+    if (!this.isConfigured() || config.discordManualStopped) {
       return;
     }
 
@@ -169,6 +183,7 @@ class DiscordService {
 
   async stop() {
     this.stopRequested = true;
+    this.lifecycleId += 1;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.nextRetryAt = null;

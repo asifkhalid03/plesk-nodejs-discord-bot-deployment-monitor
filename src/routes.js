@@ -469,6 +469,8 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
       if (!discordService.isConfigured()) {
         return res.status(400).json({ error: 'Discord is not configured. Add a bot token first.' });
       }
+      upsertEnvValues({ DISCORD_MANUAL_STOPPED: 'false' });
+      config.discordManualStopped = false;
       await discordService.tryLogin();
       res.json({ status: discordService.getStatus() });
     } catch (error) {
@@ -478,6 +480,8 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
 
   router.post('/discord/stop', async (req, res, next) => {
     try {
+      upsertEnvValues({ DISCORD_MANUAL_STOPPED: 'true' });
+      config.discordManualStopped = true;
       await reportBotService.stop();
       await discordService.stop();
       res.json({

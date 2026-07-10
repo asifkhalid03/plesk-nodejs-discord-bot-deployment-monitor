@@ -410,6 +410,15 @@ function renderDiscordStatus(status) {
   }
 
   if (status.configured) {
+    if (status.manualStopped) {
+      els.discordBadge.textContent = 'Stopped';
+      els.discordBadge.classList.add('warn');
+      els.discordConnectBtn.disabled = false;
+      els.discordStopBtn.disabled = true;
+      els.discordSummary.textContent = 'Discord bot is configured but manually stopped.';
+      return;
+    }
+
     if (status.lastError) {
       const retryText = status.nextRetryAt ? ` Next retry: ${formatDate(status.nextRetryAt)}.` : '';
       els.discordBadge.textContent = 'Error';

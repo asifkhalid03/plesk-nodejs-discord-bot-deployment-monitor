@@ -38,6 +38,7 @@ module.exports = {
   discordBotToken: process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || '',
   discordClientId: process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '',
   discordGuildId: process.env.DISCORD_GUILD_ID || process.env.GUILD_ID || '',
+  discordManualStopped: booleanEnv('DISCORD_MANUAL_STOPPED', false),
   dailyReportsChannelId: process.env.DAILY_REPORTS_CHANNEL_ID || '',
   reportsDownloadChannelId: process.env.REPORTS_DOWNLOAD_CHANNEL_ID || '',
   reportBotAutoStart: booleanEnv('REPORT_BOT_AUTO_START', false),
