@@ -140,6 +140,7 @@ button {
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
   transition: all var(--transition-fast);
   position: relative;
   overflow: hidden;
@@ -551,6 +552,7 @@ tbody tr:last-child td {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
   margin-bottom: 14px;
 }
 
@@ -620,10 +622,19 @@ tbody tr:last-child td {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 1 420px;
+  justify-content: flex-end;
+  min-width: min(100%, 340px);
 }
 
 .inlineCreate input {
+  flex: 1 1 240px;
   min-width: 220px;
+}
+
+.inlineCreate button {
+  flex: 0 0 auto;
+  min-width: 96px;
 }
 
 .groupList {
@@ -1130,7 +1141,12 @@ label.check input {
   }
 
   .inlineCreate input {
+    width: 100%;
     min-width: 0;
+  }
+
+  .inlineCreate button {
+    width: 100%;
   }
 }
 
