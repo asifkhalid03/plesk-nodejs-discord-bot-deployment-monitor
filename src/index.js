@@ -16,6 +16,21 @@ async function main() {
     if (buffer?.length) req.rawBody = buffer.toString('utf8');
   }
 
+  function setNoStoreHeaders(res) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
+    res.setHeader('Surrogate-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+  }
+
+  app.use((req, res, next) => {
+    setNoStoreHeaders(res);
+    next();
+  });
+
   app.use(express.json({ limit: '1mb', verify: captureRawBody }));
   app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], limit: '1mb', verify: captureRawBody }));
   registerAuth(app);
@@ -23,7 +38,7 @@ async function main() {
     etag: false,
     maxAge: 0,
     setHeaders(res) {
-      res.setHeader('Cache-Control', 'no-store');
+      setNoStoreHeaders(res);
     }
   }));
 
