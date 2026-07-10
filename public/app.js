@@ -415,7 +415,9 @@ function renderDiscordStatus(status) {
       els.discordBadge.classList.add('warn');
       els.discordConnectBtn.disabled = false;
       els.discordStopBtn.disabled = true;
-      els.discordSummary.textContent = 'Discord bot is configured but manually stopped.';
+      const stoppedAt = status.stoppedAt ? ` at ${formatDate(status.stoppedAt)}` : '';
+      const pid = status.pid ? ` Process PID: ${status.pid}.` : '';
+      els.discordSummary.textContent = `Discord bot is configured but manually stopped${stoppedAt}.${pid}`;
       return;
     }
 

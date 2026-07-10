@@ -29,11 +29,39 @@ function isTextChannel(channel) {
 
 async function destroyClient(client) {
   if (!client) return;
+  const waitFor = (promise, timeoutMs = 2500) => {
+    return Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(resolve, timeoutMs))
+    ]);
+  };
+
+  try {
+    if (client.user?.setStatus) {
+      await waitFor(client.user.setStatus('invisible'));
+    }
+  } catch {
+    // Presence update is best-effort before closing the gateway.
+  }
+
   try {
     const result = client.destroy();
-    if (result && typeof result.then === 'function') await result;
+    if (result && typeof result.then === 'function') await waitFor(result);
   } catch {
     // Destroy is best-effort during reconnect/stop.
+  }
+
+  try {
+    const result = client.ws?.destroy?.();
+    if (result && typeof result.then === 'function') await waitFor(result);
+  } catch {
+    // Some discord.js versions do not expose a websocket destroy method.
+  }
+
+  try {
+    client.removeAllListeners?.();
+  } catch {
+    // Listener cleanup is best-effort.
   }
 }
 
@@ -50,6 +78,8 @@ class DiscordService {
     this.nextRetryAt = null;
     this.stopRequested = false;
     this.lifecycleId = 0;
+    this.startedAt = null;
+    this.stoppedAt = null;
   }
 
   isConfigured() {
@@ -65,7 +95,12 @@ class DiscordService {
       lastErrorAt: this.lastErrorAt,
       nextRetryAt: this.nextRetryAt,
       manualStopped: Boolean(config.discordManualStopped || this.stopRequested),
-      userTag: this.client?.user?.tag || null
+      userTag: this.client?.user?.tag || null,
+      pid: process.pid,
+      uptimeSeconds: Math.round(process.uptime()),
+      startedAt: this.startedAt,
+      stoppedAt: this.stoppedAt,
+      wsStatus: this.client?.ws?.status ?? null
     };
   }
 
@@ -111,6 +146,8 @@ class DiscordService {
       this.lastErrorAt = null;
       this.nextRetryAt = null;
       this.retryDelayMs = 5000;
+      this.startedAt = new Date().toISOString();
+      this.stoppedAt = null;
       console.log(`Discord bot logged in as ${client.user.tag}`);
       this.readyWaiters.splice(0).forEach((resolve) => resolve(client));
     };
@@ -191,6 +228,8 @@ class DiscordService {
     this.loginInProgress = false;
     this.lastError = '';
     this.lastErrorAt = null;
+    this.startedAt = null;
+    this.stoppedAt = new Date().toISOString();
     if (this.client) {
       await destroyClient(this.client);
       this.client = null;
