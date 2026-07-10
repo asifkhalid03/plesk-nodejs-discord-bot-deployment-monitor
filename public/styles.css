@@ -759,12 +759,14 @@ tbody tr:last-child td {
 /* ===== Dialog / Modal ===== */
 dialog {
   width: min(760px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: 0;
   background: var(--bg-surface);
   color: var(--text-primary);
   box-shadow: var(--shadow-xl);
+  overflow: auto;
   animation: dialogIn 0.3s var(--ease-out);
 }
 
@@ -790,6 +792,10 @@ dialog::backdrop {
 }
 
 #watcherForm {
+  padding: 24px;
+}
+
+.dialogPanel {
   padding: 24px;
 }
 
@@ -829,6 +835,14 @@ dialog::backdrop {
   margin-bottom: 22px;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--border);
+}
+
+.dialogHead h2 {
+  margin: 0 0 4px;
+}
+
+.dialogHead p {
+  margin: 0;
 }
 
 .dialogActions {
