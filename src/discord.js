@@ -1,6 +1,31 @@
 const { gzipSync } = require('zlib');
-const { AttachmentBuilder, Client, GatewayIntentBits, ChannelType } = require('discord.js');
+const Discord = require('discord.js');
 const config = require('./config');
+
+const Client = Discord.Client;
+const guildTextType = Discord.ChannelType?.GuildText || 'GUILD_TEXT';
+
+function resolveIntent(name) {
+  if (Discord.GatewayIntentBits?.[name]) return Discord.GatewayIntentBits[name];
+  const v13Names = {
+    Guilds: 'GUILDS',
+    GuildMessages: 'GUILD_MESSAGES',
+    MessageContent: 'MESSAGE_CONTENT'
+  };
+  return Discord.Intents?.FLAGS?.[v13Names[name]];
+}
+
+function createAttachment(buffer, name) {
+  if (Discord.AttachmentBuilder) return new Discord.AttachmentBuilder(buffer, { name });
+  return new Discord.MessageAttachment(buffer, name);
+}
+
+function isTextChannel(channel) {
+  if (!channel) return false;
+  if (typeof channel.isTextBased === 'function') return channel.isTextBased();
+  if (typeof channel.isText === 'function') return channel.isText();
+  return channel.type === guildTextType;
+}
 
 class DiscordService {
   constructor() {
@@ -10,6 +35,9 @@ class DiscordService {
     this.retryTimer = null;
     this.loginInProgress = false;
     this.retryDelayMs = 5000;
+    this.lastError = '';
+    this.lastErrorAt = null;
+    this.nextRetryAt = null;
   }
 
   isConfigured() {
@@ -20,7 +48,11 @@ class DiscordService {
     return {
       configured: this.isConfigured(),
       ready: this.ready,
-      loginInProgress: this.loginInProgress
+      loginInProgress: this.loginInProgress,
+      lastError: this.lastError,
+      lastErrorAt: this.lastErrorAt,
+      nextRetryAt: this.nextRetryAt,
+      userTag: this.client?.user?.tag || null
     };
   }
 
@@ -40,25 +72,37 @@ class DiscordService {
     this.ready = false;
     this.client = new Client({
       intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-      ]
+        resolveIntent('Guilds'),
+        resolveIntent('GuildMessages'),
+        resolveIntent('MessageContent')
+      ].filter(Boolean)
     });
 
-    this.client.once('clientReady', () => {
+    let handledReady = false;
+    const handleReady = () => {
+      if (handledReady) return;
+      handledReady = true;
       this.ready = true;
+      this.lastError = '';
+      this.lastErrorAt = null;
+      this.nextRetryAt = null;
       this.retryDelayMs = 5000;
       console.log(`Discord bot logged in as ${this.client.user.tag}`);
       this.readyWaiters.splice(0).forEach((resolve) => resolve(this.client));
-    });
+    };
+    this.client.once('clientReady', handleReady);
+    this.client.once('ready', handleReady);
 
     this.client.on('error', (error) => {
+      this.lastError = error.message || String(error);
+      this.lastErrorAt = new Date().toISOString();
       console.error('Discord client error:', error.message);
     });
 
     this.client.on('shardDisconnect', () => {
       this.ready = false;
+      this.lastError = 'Discord shard disconnected.';
+      this.lastErrorAt = new Date().toISOString();
     });
 
     await this.client.login(config.discordBotToken);
@@ -82,12 +126,16 @@ class DiscordService {
       await this.start();
     } catch (error) {
       this.ready = false;
+      this.lastError = error.message || String(error);
+      this.lastErrorAt = new Date().toISOString();
+      this.nextRetryAt = null;
       if (this.isPermanentLoginError(error)) {
         console.error(`Discord login failed permanently: ${error.message}`);
         return;
       }
 
       const delay = this.retryDelayMs;
+      this.nextRetryAt = new Date(Date.now() + delay).toISOString();
       console.error(`Discord login failed: ${error.message}. Retrying in ${Math.round(delay / 1000)}s.`);
       this.retryDelayMs = Math.min(this.retryDelayMs * 2, 60000);
       clearTimeout(this.retryTimer);
@@ -108,6 +156,7 @@ class DiscordService {
   async stop() {
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    this.nextRetryAt = null;
     this.ready = false;
     if (this.client) {
       await this.client.destroy().catch(() => {});
@@ -148,13 +197,13 @@ class DiscordService {
     const guild = await this.client.guilds.fetch(config.discordGuildId);
     const channels = await guild.channels.fetch();
     return channels.find((channel) => {
-      return channel && channel.name === ref.replace(/^#/, '') && channel.type === ChannelType.GuildText;
+      return channel && channel.name === ref.replace(/^#/, '') && channel.type === guildTextType;
     });
   }
 
   async send(channelRef, message) {
     const channel = await this.resolveChannel(channelRef);
-    if (!channel || !channel.isTextBased()) {
+    if (!isTextChannel(channel)) {
       throw new Error(`Discord channel not found or not text-based: ${channelRef}`);
     }
     return channel.send(message);
@@ -162,7 +211,7 @@ class DiscordService {
 
   async sendPayload(channelRef, payload) {
     const channel = await this.resolveChannel(channelRef);
-    if (!channel || !channel.isTextBased()) {
+    if (!isTextChannel(channel)) {
       throw new Error(`Discord channel not found or not text-based: ${channelRef}`);
     }
     return channel.send(payload);
@@ -170,7 +219,7 @@ class DiscordService {
 
   async clearRecentMessages(channelRef, limit = 100) {
     const channel = await this.resolveChannel(channelRef);
-    if (!channel || !channel.isTextBased()) {
+    if (!isTextChannel(channel)) {
       throw new Error(`Discord channel not found or not text-based: ${channelRef}`);
     }
 
@@ -238,9 +287,7 @@ class DiscordService {
     const buffer = Buffer.from(`${body}\n`, 'utf8');
     const compressed = config.compressLargeLogAttachments;
 
-    return new AttachmentBuilder(compressed ? gzipSync(buffer) : buffer, {
-      name: `${safeName}-${timestamp}.log${compressed ? '.gz' : ''}`
-    });
+    return createAttachment(compressed ? gzipSync(buffer) : buffer, `${safeName}-${timestamp}.log${compressed ? '.gz' : ''}`);
   }
 
   splitLogBlocks(lines) {

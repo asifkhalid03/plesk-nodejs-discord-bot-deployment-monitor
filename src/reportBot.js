@@ -1,12 +1,29 @@
-const {
-  AttachmentBuilder,
-  EmbedBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder
-} = require('discord.js');
+const Discord = require('discord.js');
+const { SlashCommandBuilder } = require('@discordjs/builders');
 const PDFDocument = require('pdfkit');
 const config = require('./config');
+
+const EmbedBuilder = Discord.EmbedBuilder || Discord.MessageEmbed;
+
+function createAttachment(buffer, name) {
+  if (Discord.AttachmentBuilder) return new Discord.AttachmentBuilder(buffer, { name });
+  return new Discord.MessageAttachment(buffer, name);
+}
+
+function setEmbedFooter(embed, text) {
+  if (Discord.EmbedBuilder) return embed.setFooter({ text });
+  return embed.setFooter(text);
+}
+
+function isCommandInteraction(interaction) {
+  if (typeof interaction.isChatInputCommand === 'function') return interaction.isChatInputCommand();
+  if (typeof interaction.isCommand === 'function') return interaction.isCommand();
+  return false;
+}
+
+function ephemeralReply(content) {
+  return { content, ephemeral: true };
+}
 
 function formatDateForFilename(date) {
   return date.toISOString().split('T')[0];
@@ -87,11 +104,11 @@ class ReportBotService {
   }
 
   async registerCommands() {
-    const rest = new REST({ version: '10' }).setToken(config.discordBotToken);
-    await rest.put(
-      Routes.applicationGuildCommands(config.discordClientId, config.discordGuildId),
-      { body: this.buildCommands() }
-    );
+    const client = await this.discordService.waitUntilReady();
+    if (!client.application?.commands?.set) {
+      throw new Error('Installed discord.js version does not support slash command registration.');
+    }
+    await client.application.commands.set(this.buildCommands(), config.discordGuildId);
     this.commandsRegistered = true;
   }
 
@@ -140,19 +157,16 @@ class ReportBotService {
       return;
     }
 
-    if (!interaction.isChatInputCommand()) return;
+    if (!isCommandInteraction(interaction)) return;
     if (!this.isReportCommand(interaction.commandName)) return;
 
     if (!this.enabled) {
-      await interaction.reply({ content: 'Report bot is stopped from the web UI.', flags: 64 });
+      await interaction.reply(ephemeralReply('Report bot is stopped from the web UI.'));
       return;
     }
 
     if (interaction.channelId !== config.reportsDownloadChannelId) {
-      await interaction.reply({
-        content: 'This command can only be used in the reports-download channel.',
-        flags: 64
-      });
+      await interaction.reply(ephemeralReply('This command can only be used in the reports-download channel.'));
       return;
     }
 
@@ -161,10 +175,7 @@ class ReportBotService {
     } catch (error) {
       this.lastError = error.message;
       console.error('Report command failed:', error);
-      const errorMessage = {
-        content: 'An error occurred while processing the report. Please try again.',
-        flags: 64
-      };
+      const errorMessage = ephemeralReply('An error occurred while processing the report. Please try again.');
       if (interaction.deferred) await interaction.editReply(errorMessage);
       else await interaction.reply(errorMessage);
     }
@@ -214,7 +225,7 @@ class ReportBotService {
   async handleReportCommand(interaction) {
     const dailyReportsChannel = await this.discordService.client.channels.fetch(config.dailyReportsChannelId);
     if (!dailyReportsChannel) {
-      await interaction.reply({ content: 'Could not find the daily-reports channel.', flags: 64 });
+      await interaction.reply(ephemeralReply('Could not find the daily-reports channel.'));
       return;
     }
 
@@ -242,7 +253,7 @@ class ReportBotService {
       const dateStr = interaction.options.getString('date');
       targetDate = new Date(dateStr);
       if (Number.isNaN(targetDate.getTime())) {
-        await interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', flags: 64 });
+        await interaction.reply(ephemeralReply('Invalid date format. Use YYYY-MM-DD.'));
         return;
       }
       dateLabel = formatDateForFilename(targetDate);
@@ -355,12 +366,8 @@ class ReportBotService {
       ? `daily-reports-${dateStr}`
       : filenamePrefix;
 
-    const txtAttachment = new AttachmentBuilder(Buffer.from(reportContent, 'utf8'), {
-      name: `${baseFilename}.txt`
-    });
-    const pdfAttachment = new AttachmentBuilder(await this.createPDFReport(messages, date), {
-      name: `${baseFilename}.pdf`
-    });
+    const txtAttachment = createAttachment(Buffer.from(reportContent, 'utf8'), `${baseFilename}.txt`);
+    const pdfAttachment = createAttachment(await this.createPDFReport(messages, date), `${baseFilename}.pdf`);
 
     const embed = new EmbedBuilder()
       .setColor(messages.length > 0 ? 0x16a34a : 0xf59e0b)
@@ -371,8 +378,8 @@ class ReportBotService {
         { name: 'Reports Count', value: String(messages.length), inline: true },
         ...extraFields
       )
-      .setTimestamp()
-      .setFooter({ text: 'Daily Reports Bot - TXT & PDF' });
+      .setTimestamp();
+    setEmbedFooter(embed, 'Daily Reports Bot - TXT & PDF');
 
     await interaction.editReply({
       embeds: [embed],

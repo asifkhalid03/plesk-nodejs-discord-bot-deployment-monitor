@@ -13,6 +13,8 @@ const els = {
   restartSetupBtn: document.querySelector('#restartSetupBtn'),
   configureIntegrationsBtn: document.querySelector('#configureIntegrationsBtn'),
   configureReportsBtn: document.querySelector('#configureReportsBtn'),
+  discordConnectBtn: document.querySelector('#discordConnectBtn'),
+  discordStopBtn: document.querySelector('#discordStopBtn'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
   reportBotStartBtn: document.querySelector('#reportBotStartBtn'),
@@ -393,22 +395,42 @@ async function loadDiscordStatus() {
 
 function renderDiscordStatus(status) {
   els.discordBadge.classList.remove('ok', 'warn', 'error');
+  els.discordConnectBtn.disabled = true;
+  els.discordStopBtn.disabled = true;
 
   if (status.ready) {
     els.discordBadge.textContent = 'Connected';
     els.discordBadge.classList.add('ok');
-    els.discordSummary.textContent = 'Discord token is configured and the bot is connected.';
+    els.discordConnectBtn.disabled = true;
+    els.discordStopBtn.disabled = false;
+    els.discordSummary.textContent = status.userTag
+      ? `Discord bot is connected as ${status.userTag}.`
+      : 'Discord token is configured and the bot is connected.';
     return;
   }
 
   if (status.configured) {
+    if (status.lastError) {
+      const retryText = status.nextRetryAt ? ` Next retry: ${formatDate(status.nextRetryAt)}.` : '';
+      els.discordBadge.textContent = 'Error';
+      els.discordBadge.classList.add('error');
+      els.discordConnectBtn.disabled = false;
+      els.discordStopBtn.disabled = true;
+      els.discordSummary.textContent = `Discord login failed: ${status.lastError}.${retryText}`;
+      return;
+    }
+
     els.discordBadge.textContent = status.loginInProgress ? 'Connecting' : 'Configured';
     els.discordBadge.classList.add('warn');
+    els.discordConnectBtn.disabled = Boolean(status.loginInProgress);
+    els.discordStopBtn.disabled = true;
     els.discordSummary.textContent = 'Discord token is configured, but the bot is not connected yet.';
     return;
   }
 
   els.discordBadge.textContent = 'Disabled';
+  els.discordConnectBtn.disabled = true;
+  els.discordStopBtn.disabled = true;
   els.discordSummary.textContent = 'Discord token is not configured. Watchers can still poll logs without Discord delivery.';
 }
 
@@ -424,6 +446,8 @@ function renderReportBotStatus(status) {
   ];
   if (!status.configured) parts.push('missing env config');
   if (status.lastError) parts.push(`last error: ${status.lastError}`);
+  els.reportBotStartBtn.disabled = status.enabled || !status.configured;
+  els.reportBotStopBtn.disabled = !status.enabled;
   els.reportBotSummary.textContent = parts.join(' · ');
 }
 
@@ -846,6 +870,29 @@ els.configureIntegrationsBtn.addEventListener('click', () => {
 });
 els.configureReportsBtn.addEventListener('click', () => {
   openIntegrationsConfig().catch((error) => showToast(error.message));
+});
+els.discordConnectBtn.addEventListener('click', async () => {
+  try {
+    els.discordConnectBtn.disabled = true;
+    const data = await api('/api/discord/start', { method: 'POST' });
+    renderDiscordStatus(data.status);
+    showToast(data.status.ready ? 'Discord connected.' : 'Discord connection started.');
+  } catch (error) {
+    showToast(error.message);
+    await loadDiscordStatus().catch(() => {});
+  }
+});
+els.discordStopBtn.addEventListener('click', async () => {
+  try {
+    els.discordStopBtn.disabled = true;
+    const data = await api('/api/discord/stop', { method: 'POST' });
+    renderDiscordStatus(data.status);
+    renderReportBotStatus(data.reportBotStatus);
+    showToast('Discord stopped.');
+  } catch (error) {
+    showToast(error.message);
+    await loadDiscordStatus().catch(() => {});
+  }
 });
 els.addGroupBtn.addEventListener('click', () => {
   addGroup().catch((error) => showToast(error.message));

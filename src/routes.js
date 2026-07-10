@@ -464,6 +464,31 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
     res.json({ status: discordService.getStatus() });
   });
 
+  router.post('/discord/start', async (req, res, next) => {
+    try {
+      if (!discordService.isConfigured()) {
+        return res.status(400).json({ error: 'Discord is not configured. Add a bot token first.' });
+      }
+      await discordService.tryLogin();
+      res.json({ status: discordService.getStatus() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/discord/stop', async (req, res, next) => {
+    try {
+      await reportBotService.stop();
+      await discordService.stop();
+      res.json({
+        status: discordService.getStatus(),
+        reportBotStatus: reportBotService.getStatus()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/integrations/config', (req, res) => {
     res.json({
       config: {
