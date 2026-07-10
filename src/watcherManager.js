@@ -442,20 +442,16 @@ class WatcherManager {
   async startEnabledWatchers() {
     const watchers = await db.listWatchers();
     const enabledWatchers = watchers.filter((watcher) => watcher.enabled);
-    const results = await Promise.allSettled(enabledWatchers.map((watcher) => this.start(watcher.id)));
-    results.forEach((result, index) => {
-      if (result.status === 'rejected') {
-        const watcher = enabledWatchers[index];
-        this.setStatus(watcher.id, {
-          id: watcher.id,
-          name: watcher.name,
-          state: 'error',
-          message: result.reason?.message || 'Failed to start watcher',
-          connected: false,
-          polling: false,
-          lastErrorAt: new Date().toISOString()
-        });
-      }
+    enabledWatchers.forEach((watcher) => {
+      this.setStatus(watcher.id, {
+        id: watcher.id,
+        name: watcher.name,
+        state: 'stopped',
+        message: 'Webhook mode: FTP/SFTP starts only while a deployment job is running',
+        connected: false,
+        polling: false,
+        lastUpdateAt: new Date().toISOString()
+      });
     });
     this.startAutoClearScheduler();
   }
@@ -893,20 +889,28 @@ class WatcherManager {
       await this.runDeploymentJob(watcher, job);
     }
 
+    await this.stopIdleGroupRuntimes(groupId);
+  }
+
+  async stopIdleGroupRuntimes(groupId) {
     const watchers = await db.listWatchers();
     const groupWatchers = watchers.filter((watcher) => Number(watcher.groupId) === Number(groupId));
+
     for (const watcher of groupWatchers) {
-      if (watcher.enabled && !this.runtimes.has(Number(watcher.id))) {
-        try {
-          await this.start(watcher.id);
-        } catch (error) {
-          this.setStatus(watcher.id, {
-            state: 'error',
-            message: `Failed to restart enabled watcher after group queue finished: ${error.message}`,
-            lastErrorAt: new Date().toISOString()
-          });
-        }
-      }
+      const numericId = Number(watcher.id);
+      if (this.activeJobs.has(numericId)) continue;
+      if (!this.runtimes.has(numericId)) continue;
+
+      await this.stop(numericId, { persist: false });
+      this.setStatus(numericId, {
+        id: numericId,
+        name: watcher.name,
+        state: 'stopped',
+        message: 'Queue finished; FTP/SFTP connection closed',
+        connected: false,
+        polling: false,
+        lastUpdateAt: new Date().toISOString()
+      });
     }
   }
 
