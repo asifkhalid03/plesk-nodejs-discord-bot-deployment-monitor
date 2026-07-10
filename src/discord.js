@@ -48,6 +48,7 @@ class DiscordService {
     this.lastError = '';
     this.lastErrorAt = null;
     this.nextRetryAt = null;
+    this.stopRequested = false;
   }
 
   isConfigured() {
@@ -74,6 +75,7 @@ class DiscordService {
 
   async start() {
     this.ensureConfigured();
+    this.stopRequested = false;
 
     if (this.client) {
       await destroyClient(this.client);
@@ -112,6 +114,7 @@ class DiscordService {
 
     this.client.on('shardDisconnect', () => {
       this.ready = false;
+      if (this.stopRequested) return;
       this.lastError = 'Discord shard disconnected.';
       this.lastErrorAt = new Date().toISOString();
     });
@@ -165,6 +168,7 @@ class DiscordService {
   }
 
   async stop() {
+    this.stopRequested = true;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.nextRetryAt = null;
