@@ -5,6 +5,8 @@ const config = require('./config');
 
 const sessions = new Map();
 const cookieName = 'dlw_session';
+const setupRestartTokens = new Map();
+const setupRestartCookieName = 'dlw_setup_restart';
 const envPath = path.join(__dirname, '..', '.env');
 
 function parseCookies(req) {
@@ -77,6 +79,16 @@ function clearCookie() {
   return `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
 }
 
+function createSetupRestartCookie(token) {
+  const secure = config.trustProxy ? '; Secure' : '';
+  return `${setupRestartCookieName}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=900${secure}`;
+}
+
+function clearSetupRestartCookie() {
+  const secure = config.trustProxy ? '; Secure' : '';
+  return `${setupRestartCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
+}
+
 function readSession(req) {
   const value = parseCookies(req)[cookieName];
   if (!value) return null;
@@ -90,6 +102,25 @@ function readSession(req) {
   return session;
 }
 
+function readSetupRestartToken(req) {
+  const token = parseCookies(req)[setupRestartCookieName];
+  if (!token) return null;
+  const access = setupRestartTokens.get(token);
+  if (!access || access.expiresAt < Date.now()) {
+    setupRestartTokens.delete(token);
+    return null;
+  }
+  return access;
+}
+
+function createSetupRestartAccess() {
+  const token = crypto.randomBytes(32).toString('base64url');
+  setupRestartTokens.set(token, {
+    expiresAt: Date.now() + 15 * 60 * 1000
+  });
+  return token;
+}
+
 function wantsJson(req) {
   return req.path.startsWith('/api/') || String(req.headers.accept || '').includes('application/json');
 }
@@ -99,7 +130,7 @@ function isLoginConfigured() {
 }
 
 function isSetupAllowed(req) {
-  return config.allowRemoteSetup || isLocalRequest(req);
+  return config.allowRemoteSetup || isLocalRequest(req) || Boolean(readSetupRestartToken(req));
 }
 
 function isSetupComplete() {
@@ -141,6 +172,24 @@ function upsertEnvValues(values) {
     uiLoginEmail: values.UI_LOGIN_EMAIL || config.uiLoginEmail,
     uiLoginPassword: values.UI_LOGIN_PASSWORD || config.uiLoginPassword,
     uiSessionSecret: values.UI_SESSION_SECRET || config.uiSessionSecret
+  });
+}
+
+function removeEnvValues(keys) {
+  const targetKeys = new Set(keys);
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const lines = existing ? existing.split(/\r?\n/) : [];
+  const nextLines = lines.filter((line) => {
+    const match = line.match(/^([A-Z0-9_]+)=/);
+    return !match || !targetKeys.has(match[1]);
+  });
+
+  fs.writeFileSync(envPath, nextLines.join('\n').replace(/\n*$/, '\n'));
+  for (const key of targetKeys) delete process.env[key];
+  Object.assign(config, {
+    uiLoginEmail: targetKeys.has('UI_LOGIN_EMAIL') ? '' : config.uiLoginEmail,
+    uiLoginPassword: targetKeys.has('UI_LOGIN_PASSWORD') ? '' : config.uiLoginPassword,
+    uiSessionSecret: targetKeys.has('UI_SESSION_SECRET') ? '' : config.uiSessionSecret
   });
 }
 
@@ -229,7 +278,24 @@ function registerAuth(app) {
     if (reportsDownloadChannelId) values.REPORTS_DOWNLOAD_CHANNEL_ID = reportsDownloadChannelId;
 
     upsertEnvValues(values);
+    res.setHeader('Set-Cookie', clearSetupRestartCookie());
     return res.json({ ok: true });
+  });
+
+  app.post('/api/setup/restart', (req, res) => {
+    if (!isSetupComplete() || !isLoginConfigured()) {
+      return res.status(409).json({ error: 'Setup is not complete.' });
+    }
+
+    if (!readSession(req)) {
+      return res.status(401).json({ error: 'Login required.' });
+    }
+
+    const setupRestartToken = createSetupRestartAccess();
+    removeEnvValues(['UI_LOGIN_EMAIL', 'UI_LOGIN_PASSWORD', 'UI_SESSION_SECRET']);
+    sessions.clear();
+    res.setHeader('Set-Cookie', [clearCookie(), createSetupRestartCookie(setupRestartToken)]);
+    return res.json({ ok: true, redirectTo: '/setup' });
   });
 
   app.post('/api/auth/login', (req, res) => {

@@ -10,6 +10,7 @@ const state = {
 
 const els = {
   addWatcherBtn: document.querySelector('#addWatcherBtn'),
+  restartSetupBtn: document.querySelector('#restartSetupBtn'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
   reportBotStartBtn: document.querySelector('#reportBotStartBtn'),
@@ -623,6 +624,22 @@ async function addGroup() {
   await loadWatchers();
 }
 
+async function restartSetup() {
+  const confirmed = window.confirm(
+    'This will remove the current admin login and session secret, then open first-time setup again. Existing watcher secrets stay encrypted with the current encryption key. Continue?'
+  );
+  if (!confirmed) return;
+
+  const typed = window.prompt('Type RESET SETUP to confirm.');
+  if (typed !== 'RESET SETUP') {
+    showToast('Setup reset cancelled.');
+    return;
+  }
+
+  const data = await api('/api/setup/restart', { method: 'POST' });
+  window.location.href = data.redirectTo || '/setup';
+}
+
 async function handleGroupAction(event) {
   const button = event.target.closest('button[data-group-action]');
   if (!button) return;
@@ -757,6 +774,9 @@ fields.protocol.addEventListener('change', () => {
   fields.port.value = fields.protocol.value === 'sftp' ? 22 : 21;
 });
 els.addWatcherBtn.addEventListener('click', () => openForm());
+els.restartSetupBtn.addEventListener('click', () => {
+  restartSetup().catch((error) => showToast(error.message));
+});
 els.addGroupBtn.addEventListener('click', () => {
   addGroup().catch((error) => showToast(error.message));
 });
