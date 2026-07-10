@@ -1,6 +1,38 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const config = require('./config');
 const db = require('./db');
 const { testRemoteConnection } = require('./remoteClients');
+
+const envPath = path.join(__dirname, '..', '.env');
+
+function formatEnvValue(value) {
+  const text = String(value || '');
+  if (!text || /[\s#"'\\]/.test(text)) {
+    return JSON.stringify(text);
+  }
+  return text;
+}
+
+function upsertEnvValues(values) {
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const lines = existing ? existing.split(/\r?\n/) : [];
+  const seen = new Set();
+  const nextLines = lines.map((line) => {
+    const match = line.match(/^([A-Z0-9_]+)=/);
+    if (!match || !Object.prototype.hasOwnProperty.call(values, match[1])) return line;
+    seen.add(match[1]);
+    return `${match[1]}=${formatEnvValue(values[match[1]])}`;
+  });
+
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key)) nextLines.push(`${key}=${formatEnvValue(value)}`);
+  }
+
+  fs.writeFileSync(envPath, nextLines.join('\n').replace(/\n*$/, '\n'));
+  Object.assign(process.env, values);
+}
 
 function validateWatcherPayload(body, { partial = false } = {}) {
   const required = ['name', 'protocol', 'host', 'port', 'username', 'remotePath'];
@@ -430,6 +462,85 @@ function registerRoutes(app, watcherManager, discordService, reportBotService) {
 
   router.get('/discord/status', (req, res) => {
     res.json({ status: discordService.getStatus() });
+  });
+
+  router.get('/integrations/config', (req, res) => {
+    res.json({
+      config: {
+        hasDiscordBotToken: Boolean(config.discordBotToken),
+        discordClientId: config.discordClientId || '',
+        discordGuildId: config.discordGuildId || '',
+        dailyReportsChannelId: config.dailyReportsChannelId || '',
+        reportsDownloadChannelId: config.reportsDownloadChannelId || '',
+        reportBotAutoStart: Boolean(config.reportBotAutoStart)
+      }
+    });
+  });
+
+  router.put('/integrations/config', async (req, res, next) => {
+    try {
+      const discordBotToken = String(req.body?.discordBotToken || '').trim();
+      const clearDiscordBotToken = Boolean(req.body?.clearDiscordBotToken);
+      const discordClientId = String(req.body?.discordClientId || '').trim();
+      const discordGuildId = String(req.body?.discordGuildId || '').trim();
+      const dailyReportsChannelId = String(req.body?.dailyReportsChannelId || '').trim();
+      const reportsDownloadChannelId = String(req.body?.reportsDownloadChannelId || '').trim();
+
+      for (const [label, value] of Object.entries({
+        discordClientId,
+        discordGuildId,
+        dailyReportsChannelId,
+        reportsDownloadChannelId
+      })) {
+        if (value && !/^\d{16,25}$/.test(value)) {
+          return res.status(400).json({ error: `${label} must be a Discord snowflake ID.` });
+        }
+      }
+
+      const tokenChanged = clearDiscordBotToken || Boolean(discordBotToken);
+      const values = {
+        DISCORD_CLIENT_ID: discordClientId,
+        DISCORD_GUILD_ID: discordGuildId,
+        DAILY_REPORTS_CHANNEL_ID: dailyReportsChannelId,
+        REPORTS_DOWNLOAD_CHANNEL_ID: reportsDownloadChannelId
+      };
+
+      if (clearDiscordBotToken) values.DISCORD_BOT_TOKEN = '';
+      if (discordBotToken) values.DISCORD_BOT_TOKEN = discordBotToken;
+
+      upsertEnvValues(values);
+      Object.assign(config, {
+        discordBotToken: Object.prototype.hasOwnProperty.call(values, 'DISCORD_BOT_TOKEN') ? values.DISCORD_BOT_TOKEN : config.discordBotToken,
+        discordClientId,
+        discordGuildId,
+        dailyReportsChannelId,
+        reportsDownloadChannelId
+      });
+
+      await reportBotService.stop();
+      if (tokenChanged) {
+        await discordService.stop();
+        discordService.startInBackground();
+      } else if (discordService.isConfigured() && !discordService.getStatus().ready && !discordService.getStatus().loginInProgress) {
+        discordService.startInBackground();
+      }
+
+      res.json({
+        ok: true,
+        config: {
+          hasDiscordBotToken: Boolean(config.discordBotToken),
+          discordClientId: config.discordClientId || '',
+          discordGuildId: config.discordGuildId || '',
+          dailyReportsChannelId: config.dailyReportsChannelId || '',
+          reportsDownloadChannelId: config.reportsDownloadChannelId || '',
+          reportBotAutoStart: Boolean(config.reportBotAutoStart)
+        },
+        discordStatus: discordService.getStatus(),
+        reportBotStatus: reportBotService.getStatus()
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get('/report-bot/status', (req, res) => {

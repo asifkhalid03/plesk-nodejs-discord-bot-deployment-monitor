@@ -11,6 +11,8 @@ const state = {
 const els = {
   addWatcherBtn: document.querySelector('#addWatcherBtn'),
   restartSetupBtn: document.querySelector('#restartSetupBtn'),
+  configureIntegrationsBtn: document.querySelector('#configureIntegrationsBtn'),
+  configureReportsBtn: document.querySelector('#configureReportsBtn'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshBtn: document.querySelector('#refreshBtn'),
   reportBotStartBtn: document.querySelector('#reportBotStartBtn'),
@@ -47,12 +49,27 @@ const els = {
   commandSteps: document.querySelector('#commandSteps'),
   commandOutput: document.querySelector('#commandOutput'),
   copyCommandBtn: document.querySelector('#copyCommandBtn'),
+  integrationsDialog: document.querySelector('#integrationsDialog'),
+  integrationsForm: document.querySelector('#integrationsForm'),
+  closeIntegrationsDialogBtn: document.querySelector('#closeIntegrationsDialogBtn'),
+  cancelIntegrationsBtn: document.querySelector('#cancelIntegrationsBtn'),
+  integrationsFormHelp: document.querySelector('#integrationsFormHelp'),
+  integrationsFormError: document.querySelector('#integrationsFormError'),
   formError: document.querySelector('#formError'),
   toast: document.querySelector('#toast'),
   statTotal: document.querySelector('#statTotal'),
   statActive: document.querySelector('#statActive'),
   statErrors: document.querySelector('#statErrors'),
   statStopped: document.querySelector('#statStopped')
+};
+
+const integrationFields = {
+  discordBotToken: document.querySelector('#integrationDiscordBotToken'),
+  clearDiscordBotToken: document.querySelector('#integrationClearDiscordBotToken'),
+  discordClientId: document.querySelector('#integrationDiscordClientId'),
+  discordGuildId: document.querySelector('#integrationDiscordGuildId'),
+  dailyReportsChannelId: document.querySelector('#integrationDailyReportsChannelId'),
+  reportsDownloadChannelId: document.querySelector('#integrationReportsDownloadChannelId')
 };
 
 const fields = {
@@ -408,6 +425,53 @@ function renderReportBotStatus(status) {
   if (!status.configured) parts.push('missing env config');
   if (status.lastError) parts.push(`last error: ${status.lastError}`);
   els.reportBotSummary.textContent = parts.join(' · ');
+}
+
+async function openIntegrationsConfig() {
+  els.integrationsForm.reset();
+  els.integrationsFormError.classList.add('hidden');
+  els.integrationsFormHelp.textContent = 'Loading configuration...';
+  els.integrationsDialog.showModal();
+
+  const data = await api('/api/integrations/config');
+  const config = data.config || {};
+  integrationFields.discordBotToken.value = '';
+  integrationFields.discordBotToken.disabled = false;
+  integrationFields.clearDiscordBotToken.checked = false;
+  integrationFields.discordClientId.value = config.discordClientId || '';
+  integrationFields.discordGuildId.value = config.discordGuildId || '';
+  integrationFields.dailyReportsChannelId.value = config.dailyReportsChannelId || '';
+  integrationFields.reportsDownloadChannelId.value = config.reportsDownloadChannelId || '';
+  els.integrationsFormHelp.textContent = config.hasDiscordBotToken
+    ? 'Discord token is already configured. Leave token blank to keep it.'
+    : 'Discord token is not configured. Add a token to enable Discord features.';
+}
+
+async function saveIntegrationsConfig(event) {
+  event.preventDefault();
+  els.integrationsFormError.classList.add('hidden');
+
+  try {
+    const data = await api('/api/integrations/config', {
+      method: 'PUT',
+      body: JSON.stringify({
+        discordBotToken: integrationFields.discordBotToken.value.trim(),
+        clearDiscordBotToken: integrationFields.clearDiscordBotToken.checked,
+        discordClientId: integrationFields.discordClientId.value.trim(),
+        discordGuildId: integrationFields.discordGuildId.value.trim(),
+        dailyReportsChannelId: integrationFields.dailyReportsChannelId.value.trim(),
+        reportsDownloadChannelId: integrationFields.reportsDownloadChannelId.value.trim()
+      })
+    });
+
+    renderDiscordStatus(data.discordStatus);
+    renderReportBotStatus(data.reportBotStatus);
+    els.integrationsDialog.close();
+    showToast('Integration configuration saved.');
+  } catch (error) {
+    els.integrationsFormError.textContent = error.message;
+    els.integrationsFormError.classList.remove('hidden');
+  }
 }
 
 function openForm(watcher = null) {
@@ -777,6 +841,12 @@ els.addWatcherBtn.addEventListener('click', () => openForm());
 els.restartSetupBtn.addEventListener('click', () => {
   restartSetup().catch((error) => showToast(error.message));
 });
+els.configureIntegrationsBtn.addEventListener('click', () => {
+  openIntegrationsConfig().catch((error) => showToast(error.message));
+});
+els.configureReportsBtn.addEventListener('click', () => {
+  openIntegrationsConfig().catch((error) => showToast(error.message));
+});
 els.addGroupBtn.addEventListener('click', () => {
   addGroup().catch((error) => showToast(error.message));
 });
@@ -816,6 +886,13 @@ els.loadRemoteLogBtn.addEventListener('click', () => {
   loadRemoteLogTail().catch((error) => showToast(error.message));
 });
 els.closeCommandDialogBtn.addEventListener('click', () => els.commandDialog.close());
+els.closeIntegrationsDialogBtn.addEventListener('click', () => els.integrationsDialog.close());
+els.cancelIntegrationsBtn.addEventListener('click', () => els.integrationsDialog.close());
+els.integrationsForm.addEventListener('submit', saveIntegrationsConfig);
+integrationFields.clearDiscordBotToken.addEventListener('change', () => {
+  integrationFields.discordBotToken.disabled = integrationFields.clearDiscordBotToken.checked;
+  if (integrationFields.clearDiscordBotToken.checked) integrationFields.discordBotToken.value = '';
+});
 els.commandNodeBin.addEventListener('input', updateDeploymentCommand);
 els.commandLogPath.addEventListener('input', updateDeploymentCommand);
 els.commandSteps.addEventListener('input', updateDeploymentCommand);
