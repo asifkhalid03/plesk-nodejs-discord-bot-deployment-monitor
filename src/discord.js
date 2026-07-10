@@ -27,6 +27,16 @@ function isTextChannel(channel) {
   return channel.type === guildTextType;
 }
 
+async function destroyClient(client) {
+  if (!client) return;
+  try {
+    const result = client.destroy();
+    if (result && typeof result.then === 'function') await result;
+  } catch {
+    // Destroy is best-effort during reconnect/stop.
+  }
+}
+
 class DiscordService {
   constructor() {
     this.client = null;
@@ -66,7 +76,8 @@ class DiscordService {
     this.ensureConfigured();
 
     if (this.client) {
-      await this.client.destroy().catch(() => {});
+      await destroyClient(this.client);
+      this.client = null;
     }
 
     this.ready = false;
@@ -158,8 +169,12 @@ class DiscordService {
     this.retryTimer = null;
     this.nextRetryAt = null;
     this.ready = false;
+    this.loginInProgress = false;
+    this.lastError = '';
+    this.lastErrorAt = null;
     if (this.client) {
-      await this.client.destroy().catch(() => {});
+      await destroyClient(this.client);
+      this.client = null;
     }
   }
 
