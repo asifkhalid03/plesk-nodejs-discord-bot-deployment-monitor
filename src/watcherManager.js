@@ -8,6 +8,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sleepWithSignal(ms, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
+function splitLogLines(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
 class WatcherRuntime {
   constructor(watcher, discordService, onStatus, options = {}) {
     this.watcher = watcher;
@@ -440,16 +461,62 @@ class WatcherManager {
   }
 
   async startDeploymentQueues() {
-    const staleCount = await db.failStaleRunningDeploymentJobs();
-    if (staleCount > 0) {
-      console.warn(`Marked ${staleCount} stale deployment job(s) as failed after restart.`);
-    }
+    await this.recoverRunningDeploymentJobs();
     const groups = await db.listWatcherGroups();
     groups.forEach((group) => {
       this.processGroupQueue(group.id).catch((error) => {
         console.error(`Deployment queue processor failed for group ${group.id}:`, error);
       });
     });
+  }
+
+  async recoverRunningDeploymentJobs() {
+    const jobs = await db.listRunningDeploymentJobs();
+    if (jobs.length === 0) return;
+
+    for (const job of jobs) {
+      const watcher = await db.getWatcher(job.watcherId, { includeSecrets: true });
+      if (!watcher) {
+        await db.markDeploymentJobFailed(job.id, 'App restarted while deployment job was running, and the watcher no longer exists.');
+        continue;
+      }
+
+      try {
+        const snapshot = await this.readRemoteLogSnapshot(watcher, {
+          baselineSize: job.logStartOffset ?? 0,
+          baselineText: null
+        });
+        if (this.hasDeploymentFinishMarker(snapshot.text)) {
+          const completed = await db.markDeploymentJobCompleted(job.id, {
+            logEndOffset: snapshot.size
+          });
+          this.activeJobs.set(Number(watcher.id), completed);
+          this.setStatus(watcher.id, {
+            id: watcher.id,
+            name: watcher.name,
+            state: 'stopped',
+            message: `Recovered completed deployment job #${job.id} from FTP/SFTP log after restart`,
+            connected: false,
+            polling: false,
+            lastUpdateAt: new Date().toISOString(),
+            lastOffset: snapshot.size
+          });
+          this.activeJobs.delete(Number(watcher.id));
+          continue;
+        }
+
+        await db.markDeploymentJobFailed(
+          job.id,
+          'App restarted while deployment job was running; finish marker was not found in the remote log.',
+          { logEndOffset: snapshot.size }
+        );
+      } catch (error) {
+        await db.markDeploymentJobFailed(
+          job.id,
+          `App restarted while deployment job was running; remote log recovery failed: ${error.message}`
+        );
+      }
+    }
   }
 
   startAutoClearScheduler() {
@@ -604,6 +671,110 @@ class WatcherManager {
     }
   }
 
+  async readRemoteLogSnapshot(watcher, { baselineSize = 0, baselineText = null, maxBytes = 1000000 } = {}) {
+    const safeMaxBytes = Math.min(Math.max(Number(maxBytes) || 1000000, 4096), 2000000);
+    const client = createRemoteClient(watcher);
+    try {
+      await client.connect();
+      const resolvedPath = await resolveRemotePath(client, watcher.remotePath);
+      const stat = await client.stat(resolvedPath);
+      let startOffset = 0;
+      let mode = 'full';
+
+      if (stat.size > baselineSize) {
+        startOffset = baselineSize;
+        mode = 'append';
+      } else if (stat.size === baselineSize && stat.size > safeMaxBytes) {
+        startOffset = Math.max(0, stat.size - safeMaxBytes);
+        mode = 'same-size-tail';
+      }
+
+      if (stat.size < baselineSize || stat.size <= safeMaxBytes) {
+        startOffset = 0;
+        mode = stat.size < baselineSize ? 'rewritten' : 'full';
+      }
+
+      const chunk = await client.readRange(resolvedPath, startOffset, stat.size - 1);
+      let text = chunk.toString('utf8');
+      if (startOffset > 0) {
+        text = text.replace(/^[^\r\n]*(?:\r?\n|$)/, '');
+      }
+
+      const changed =
+        stat.size !== baselineSize ||
+        baselineText === null ||
+        text !== baselineText;
+
+      return {
+        text,
+        lines: splitLogLines(text),
+        changed,
+        mode,
+        resolvedPath,
+        size: stat.size,
+        startOffset
+      };
+    } finally {
+      await client.close();
+    }
+  }
+
+  hasDeploymentFinishMarker(text) {
+    const source = String(text || '');
+    const finishMarker = config.deploymentBlockEndText || 'Deployment finished';
+    if (!finishMarker) return false;
+    const lastFinish = source.lastIndexOf(finishMarker);
+    if (lastFinish === -1) return false;
+
+    const startMarker = config.deploymentBlockStartText || 'Deployment started:';
+    const lastStart = startMarker ? source.lastIndexOf(startMarker) : -1;
+    return lastStart === -1 || lastFinish >= lastStart;
+  }
+
+  async waitForRemoteFinishMarker(watcher, job, baseline, signal) {
+    const intervalMs = Math.max(Number(config.webhookTriggerPollIntervalSeconds) || 2, 1) * 1000;
+    let lastErrorMessage = '';
+
+    while (!signal?.aborted) {
+      try {
+        const snapshot = await this.readRemoteLogSnapshot(watcher, baseline);
+        if (snapshot.changed && this.hasDeploymentFinishMarker(snapshot.text)) {
+          if (snapshot.lines.length > 0) this.appendLogs(watcher.id, snapshot.lines);
+          this.setStatus(watcher.id, {
+            state: 'running',
+            message: `Finish marker detected in FTP/SFTP log for job #${job.id}`,
+            lastUpdateAt: new Date().toISOString(),
+            lastOffset: snapshot.size
+          });
+          return {
+            watcherId: watcher.id,
+            remotePath: snapshot.resolvedPath,
+            lastOffset: snapshot.size,
+            source: 'remote-log-scan'
+          };
+        }
+        lastErrorMessage = '';
+      } catch (error) {
+        lastErrorMessage = error.message;
+        this.setStatus(watcher.id, {
+          state: 'running',
+          message: `Waiting for finish marker; remote log check failed: ${error.message}`,
+          lastUpdateAt: new Date().toISOString()
+        });
+      }
+
+      await sleepWithSignal(intervalMs, signal);
+    }
+
+    return {
+      watcherId: watcher.id,
+      remotePath: watcher.remotePath,
+      lastOffset: baseline?.baselineSize,
+      aborted: true,
+      errorMessage: lastErrorMessage
+    };
+  }
+
   async start(id) {
     await this.stop(id, { persist: false });
     this.clearLogs(id);
@@ -743,6 +914,7 @@ class WatcherManager {
     const numericId = Number(watcher.id);
     let runtime = null;
     let timeoutHandle = null;
+    let finishScanController = null;
 
     await db.markDeploymentJobRunning(job.id, 0);
     const activeJob = await db.getDeploymentJob(job.id);
@@ -795,6 +967,27 @@ class WatcherManager {
       await runtime.pollOnce();
       runtime.schedule(runtime.getPollIntervalSeconds() * 1000);
 
+      let baseline = {
+        baselineSize: runtime.watcher.lastOffset || 0,
+        baselineText: null
+      };
+      try {
+        const snapshot = await this.readRemoteLogSnapshot(watcher, {
+          baselineSize: runtime.watcher.lastOffset || 0,
+          baselineText: null
+        });
+        baseline = {
+          baselineSize: snapshot.size,
+          baselineText: snapshot.text
+        };
+      } catch (error) {
+        this.setStatus(numericId, {
+          state: 'running',
+          message: `Unable to capture pre-deploy log baseline: ${error.message}`,
+          lastUpdateAt: new Date().toISOString()
+        });
+      }
+
       await this.callServerDeployWebhook(watcher, activeJob);
 
       const timeoutMs = Math.max(Number(watcher.deploymentTimeoutSeconds) || 1800, 1) * 1000;
@@ -803,8 +996,17 @@ class WatcherManager {
           reject(new Error(`Deployment timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
         }, timeoutMs);
       });
+      finishScanController = new AbortController();
+      const remoteFinishPromise = this.waitForRemoteFinishMarker(
+        watcher,
+        activeJob,
+        baseline,
+        finishScanController.signal
+      );
 
-      const finishInfo = await Promise.race([finishPromise, timeoutPromise]);
+      const finishInfo = await Promise.race([finishPromise, remoteFinishPromise, timeoutPromise]);
+      finishScanController.abort();
+      finishScanController = null;
       clearTimeout(timeoutHandle);
       timeoutHandle = null;
       const completed = await db.markDeploymentJobCompleted(job.id, {
@@ -818,6 +1020,7 @@ class WatcherManager {
         lastOffset: finishInfo?.lastOffset
       });
     } catch (error) {
+      if (finishScanController) finishScanController.abort();
       if (timeoutHandle) clearTimeout(timeoutHandle);
       const status = this.getStatus(numericId);
       const failed = await db.markDeploymentJobFailed(job.id, error.message, {

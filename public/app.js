@@ -251,8 +251,8 @@ function renderPendingWebhooks() {
         </div>
       </div>
       <div class="pendingActions">
-        <button data-action="view-log" data-id="${job.watcherId}">${icon('eye')}View log</button>
-        <button data-action="cancel-job" data-id="${job.watcherId}" data-job-id="${job.id}" ${job.status === 'queued' ? '' : 'disabled'}>Cancel</button>
+        <button data-action="view-log" data-id="${job.watcherId}" data-remote="1">${icon('eye')}View log</button>
+        <button data-action="cancel-job" data-id="${job.watcherId}" data-job-id="${job.id}" ${job.status === 'queued' ? '' : 'disabled'}>Cancel queued</button>
       </div>
     `;
     els.pendingWebhooksList.appendChild(item);
@@ -699,7 +699,7 @@ function closeLiveLog() {
   els.logDialog.close();
 }
 
-async function openLiveLog(watcher) {
+async function openLiveLog(watcher, options = {}) {
   state.activeLogWatcherId = watcher.id;
   els.logDialogTitle.textContent = `${watcher.name || `Watcher ${watcher.id}`} live log`;
   els.logDialogSummary.textContent = 'Loading log lines...';
@@ -707,8 +707,8 @@ async function openLiveLog(watcher) {
   els.logDialog.showModal();
   clearInterval(state.logPollTimer);
   state.activeLogRemoteLoaded = false;
-  const capturedCount = await loadLiveLog();
-  if (!capturedCount && !state.activeLogRemoteLoaded) {
+  const capturedCount = options.remoteFirst ? 0 : await loadLiveLog();
+  if (options.remoteFirst || (!capturedCount && !state.activeLogRemoteLoaded)) {
     await loadRemoteLogTail();
   }
   els.liveLogBlock.scrollTop = els.liveLogBlock.scrollHeight;
@@ -808,7 +808,17 @@ async function handleAction(event) {
   if (!button) return;
   const id = button.dataset.id;
   const action = button.dataset.action;
-  const watcher = state.watchers.find((item) => String(item.id) === String(id));
+  const pendingJob = state.pendingJobs.find((item) => String(item.watcherId) === String(id));
+  const watcher = state.watchers.find((item) => String(item.id) === String(id)) || (
+    pendingJob
+      ? {
+          id,
+          name: pendingJob.watcherName || `Watcher ${id}`,
+          host: pendingJob.watcherHost,
+          remotePath: pendingJob.watcherRemotePath
+        }
+      : null
+  );
 
   try {
     button.disabled = true;
@@ -818,7 +828,7 @@ async function handleAction(event) {
     }
 
     if (action === 'view-log') {
-      await openLiveLog(watcher || { id });
+      await openLiveLog(watcher || { id }, { remoteFirst: button.dataset.remote === '1' });
       return;
     }
 
@@ -829,9 +839,9 @@ async function handleAction(event) {
 
     if (action === 'cancel-job') {
       const jobId = button.dataset.jobId;
-      if (!confirm(`Cancel queued webhook job #${jobId}?`)) return;
+      if (!confirm(`Cancel waiting webhook job #${jobId}? Running deployments will not be stopped.`)) return;
       await api(`/api/watchers/${id}/jobs/${jobId}/cancel`, { method: 'POST' });
-      showToast('Webhook job cancelled.');
+      showToast('Waiting webhook job cancelled.');
       await loadPendingWebhooks();
     }
 
@@ -1020,6 +1030,7 @@ els.logDialog.addEventListener('close', () => {
 });
 els.form.addEventListener('submit', saveForm);
 els.watchersBody.addEventListener('click', handleAction);
+els.pendingWebhooksList.addEventListener('click', handleAction);
 els.groupsList.addEventListener('click', handleGroupAction);
 
 async function init() {

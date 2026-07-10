@@ -526,6 +526,15 @@ async function listPendingDeploymentJobs({ limit = 100 } = {}) {
   return rows.map(publicDeploymentJob);
 }
 
+async function listRunningDeploymentJobs() {
+  const rows = await db.all(
+    `SELECT * FROM deployment_jobs
+     WHERE status = 'running'
+     ORDER BY id ASC`
+  );
+  return rows.map(publicDeploymentJob);
+}
+
 async function getNextQueuedDeploymentJob(watcherId) {
   const row = await db.get(
     `SELECT * FROM deployment_jobs
@@ -710,6 +719,7 @@ module.exports = {
   getDeploymentJob,
   listDeploymentJobs,
   listPendingDeploymentJobs,
+  listRunningDeploymentJobs,
   getNextQueuedDeploymentJob,
   getNextQueuedDeploymentJobForGroup,
   getRunningDeploymentJob,
